@@ -7,6 +7,7 @@
 
 import chalk from "chalk";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { callLLM, MODEL } from "./llm.js";
 import { executeTool } from "./tools.js";
@@ -38,16 +39,40 @@ export async function runAgent(task, maxSteps) {
     }
   }
 
+  // Load codebase index if it exists (implements next-gen indexing)
+  let indexContext = "";
+  const indexFile = resolve(resolvedWorkdir, ".agent_index.json");
+  if (existsSync(indexFile)) {
+    try {
+      const indexRaw = await readFile(indexFile, "utf-8");
+      const index = JSON.parse(indexRaw);
+      const filesList = Object.keys(index.files);
+      if (filesList.length > 0) {
+        indexContext = `\n\n## CODEBASE STRUCTURE (Auto-Indexed)
+You have immediate knowledge of the repository structure. Use this to locate files directly without scanning:
+${filesList.map(f => {
+  const struct = index.files[f].structure || { functions: [], classes: [] };
+  const details = [];
+  if (struct.classes?.length) details.push(`classes: [${struct.classes.join(", ")}]`);
+  if (struct.functions?.length) details.push(`funcs: [${struct.functions.join(", ")}]`);
+  return `- ${f} (${details.join("; ") || "generic text file"})`;
+}).join("\n")}`;
+      }
+    } catch (err) {
+      console.log(chalk.red(`⚠️  Failed to load codebase index: ${err.message}`));
+    }
+  }
+
   // Load memory from previous sessions
   const memoryContext = await getMemoryContext();
 
-  // Dynamically inject workspace context into the system prompt
+  // Dynamically inject workspace and codebase context into the system prompt (JSONL format compliant)
   const workspaceContext = `\n\n## ACTIVE WORKSPACE
 Your active workspace directory is: ${resolvedWorkdir}
-All tool operations (reading, writing, listing, grep, shell commands) are automatically executed relative to this folder.
+All tool operations (reading, writing, patching, grep, shell commands) are automatically executed relative to this folder.
 Note: The agent's own code folder is completely hidden from your toolbox. You are operating strictly on the user's project codebase.`;
 
-  const systemPrompt = SYSTEM_PROMPT + workspaceContext + memoryContext;
+  const systemPrompt = SYSTEM_PROMPT + workspaceContext + indexContext + memoryContext;
 
   // Initialize conversation with system prompt + user task
   const messages = [
@@ -61,20 +86,48 @@ Note: The agent's own code folder is completely hidden from your toolbox. You ar
   console.log(chalk.cyan.bold("\n🤖 Agent started\n"));
   console.log(chalk.dim(`   Model: ${MODEL}`));
   console.log(chalk.dim(`   Max steps: ${max}`));
-  console.log(chalk.dim(`   Memory: ${memoryContext ? "loaded from previous sessions" : "no previous sessions"}`));
+  console.log(chalk.dim(`   Workspace: ${resolvedWorkdir}`));
+  console.log(chalk.dim(`   Index: ${indexContext ? "Loaded (.agent_index.json)" : "Not indexed (run index_codebase first)"}`));
   console.log(chalk.dim(`   Task: ${task}\n`));
   console.log(chalk.dim("─".repeat(60)) + "\n");
 
   for (let step = 1; step <= max; step++) {
     console.log(chalk.yellow.bold(`⚡ Step ${step}/${max}`));
 
-    // ---- 1. THINK + ACT: Ask the LLM what to do next ----
+    // ---- 1. THINK + ACT: Ask the LLM what to do next with live streaming ----
     let response;
+    let printedHeader = false;
+    
+    const onChunk = (chunk) => {
+      if (chunk.type === "content") {
+        if (!printedHeader) {
+          process.stdout.write(chalk.blue.bold("💭 Thinking: "));
+          printedHeader = true;
+        }
+        process.stdout.write(chalk.blue(chunk.text));
+      } else if (chunk.type === "tool_name") {
+        if (!printedHeader) {
+          // If model skipped reasoning and went straight to tool calls
+          printedHeader = true;
+        }
+        // Tool name streaming
+        if (chunk.name) {
+          process.stdout.write(chalk.magenta(chunk.name));
+        }
+      } else if (chunk.type === "tool_args") {
+        // Tool arguments streaming (rendered in grey)
+        if (chunk.args) {
+          process.stdout.write(chalk.gray(chunk.args));
+        }
+      }
+    };
+
     try {
-      response = await callLLM(messages, TOOL_SCHEMAS);
+      // Execute streamed LLM call
+      response = await callLLM(messages, TOOL_SCHEMAS, onChunk);
+      console.log(); // Print final newline after stream completes
     } catch (err) {
       console.log(chalk.red(`\n❌ LLM error: ${err.message}\n`));
-      // Retry once on transient errors
       if (step < max) {
         console.log(chalk.yellow("   Retrying...\n"));
         continue;
@@ -100,32 +153,13 @@ Note: The agent's own code folder is completely hidden from your toolbox. You ar
     }
 
     // ---- 3. OBSERVE: Execute each tool call ----
-    // Show thinking if the model included text alongside tool calls
-    if (response.content) {
-      console.log(chalk.blue(`\n💭 Thinking: ${response.content}\n`));
-    }
+    console.log(chalk.magenta(`\n   🔧 Executing tool calls...`));
 
     for (const toolCall of response.tool_calls) {
       const { name, arguments: args } = toolCall.function;
       toolsUsed.add(name);
 
-      // Log what tool is being called
-      let argsPreview;
-      try {
-        const parsed = JSON.parse(args);
-        argsPreview = Object.entries(parsed)
-          .map(([k, v]) => {
-            const val = typeof v === "string" && v.length > 80
-              ? v.slice(0, 80) + "…"
-              : v;
-            return `${k}: ${JSON.stringify(val)}`;
-          })
-          .join(", ");
-      } catch {
-        argsPreview = args;
-      }
-
-      console.log(chalk.magenta(`   🔧 ${name}(${argsPreview})`));
+      console.log(chalk.magenta(`   👉 Running ${name}...`));
 
       // Execute the tool
       const result = await executeTool(name, args);
@@ -135,7 +169,7 @@ Note: The agent's own code folder is completely hidden from your toolbox. You ar
         result.length > 300
           ? result.slice(0, 300) + chalk.dim(`\n   ... (${result.length} chars total)`)
           : result;
-      console.log(chalk.gray(`   📋 ${preview}\n`));
+      console.log(chalk.gray(`   📋 Observation:\n   ${preview.split("\n").join("\n   ")}\n`));
 
       // ---- 4. Feed observation back into the conversation ----
       messages.push({

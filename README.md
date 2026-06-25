@@ -1,152 +1,87 @@
 # 🧠 ReAct SWE Agent
 
-A lean, autonomous AI coding agent (~560 lines of code) that uses the **ReAct (Thought → Action → Observation)** loop to solve coding tasks inside your terminal. It reads files, edits code, searches patterns, and runs command-line commands to test its work.
+A production-grade, highly optimized autonomous AI software engineering agent (~800 lines of code) that uses the **ReAct (Thought → Action → Observation)** loop to solve complex coding tasks directly inside your terminal.
+
+It features **24/7 Autonomous Supervision**, **Local Codebase Indexing**, **Space-Sensitive Partial Patching**, **Built-in Syntax & Indentation Checkers**, and **Real-time Live Streaming** of thoughts and tool calls.
 
 ---
 
-## 🚀 Absolute Beginner's Guide (How to Setup & Run)
+## 🚀 Key Features
 
-Follow these exact steps to get the agent running on your computer.
-
-### Step 1: Check if you have Node.js installed
-You need **Node.js** installed on your computer. 
-* Open your Terminal (Mac/Linux) or Command Prompt (Windows).
-* Type this command and press Enter:
-  ```bash
-  node -v
-  ```
-* If it prints a number like `v18.x.x` or `v22.x.x`, you are ready!
-* If it says "command not found", download and install Node.js from [nodejs.org](https://nodejs.org/).
+*   **🎬 24/7 Autonomous Mode (Director AI)**: A high-level Director AI supervises the Worker Agent, breaking complex goals into multi-step sub-tasks, reviewing git status and test logs, and iterating autonomously until the entire project is verified and complete.
+*   **⚡ Next-Gen Codebase Indexing**: The agent automatically scans and maps your codebase on startup, indexing imports, exports, functions, and classes to `.agent_index.json`. The AI starts with deep codebase knowledge, bypassing the need to list directories.
+*   **🔧 Space-Sensitive Partial Patching (`patch_file`)**: Edits existing files by replacing precise blocks of code instead of rewriting entire files. Space-sensitive, preserves indentation, and saves up to 90% in token usage!
+*   **🔒 Heuristic Syntax & Indentation Checker**: Runs automatic, zero-dependency static analysis before saving code. It flags unclosed brackets, mixed tabs/spaces, unexpected indentation jumps, and runs built-in compiler checks (`node --check` for JS, `JSON.parse` for JSON) to self-correct code before execution.
+*   **📺 Real-Time Live Streaming**: Watch the AI's reasoning, thought process, and tool calls stream live in your terminal token-by-token with color-coded previews.
+*   **📝 Structured JSONL Prompts**: System instructions and conversation history are formatted as structured JSON Lines (JSONL), ensuring hyper-predictable behavior and instruction-following.
 
 ---
 
-### Step 2: Download the Project
-1. Open your terminal.
-2. Clone this repository (or download it as a ZIP and extract it):
-   ```bash
-   git clone https://github.com/Electroiscoding/reactsystemlearning1.git
-   ```
-3. Enter the project folder:
-   ```bash
-   cd reactsystemlearning1
-   ```
+## 🚀 Setup & Installation
 
----
-
-### Step 3: Install the Packages
-Run the install command to get all required dependencies automatically:
+### Step 1: Install Node.js
+You need **Node.js** (v18+ or v22+) installed on your computer.
 ```bash
+node -v
+```
+If not installed, get it from [nodejs.org](https://nodejs.org/).
+
+### Step 2: Clone & Install Dependencies
+```bash
+git clone https://github.com/Electroiscoding/reactsystemlearning1.git
+cd reactsystemlearning1
 npm install
 ```
 
----
-
-### Step 4: Add your API Key
-The agent needs an API Key to talk to the AI brain.
-1. In the project folder, create a copy of the `.env.example` file and name it `.env`:
-   * **On Mac/Linux, run:**
-     ```bash
-     cp .env.example .env
-     ```
-   * **On Windows, run:**
-     ```cmd
-     copy .env.example .env
-     ```
-2. Open this new `.env` file in your favorite text editor (like VS Code, Notepad, etc.).
-3. Put your OpenRouter key next to `API_KEY=`. It should look like this:
+### Step 3: Configure your Environment
+1. Create a `.env` file from the template:
+   * **Mac/Linux:** `cp .env.example .env`
+   * **Windows:** `copy .env.example .env`
+2. Open `.env` and add your OpenRouter key:
    ```env
-   API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxx
+   API_KEY=sk-or-v1-your-key-here
    BASE_URL=https://openrouter.ai/api/v1
    MODEL=openrouter/free
    ```
-4. **If you cloned this folder inside an existing project** (to help you edit your own repository), also add this line to the bottom of your `.env` file so the agent targets the parent folder instead of itself:
+3. **Important (Nesting in other projects)**: If you clone this agent folder inside your own repository to edit it, add this line to your `.env` so the agent targets your project and not its own folder:
    ```env
    WORKDIR=../
    ```
-5. Save the file. (Note: `.env` is hidden by default and ignored by Git so your key stays 100% safe).
 
 ---
 
-### Step 5: Run the Agent!
+## 🎮 How to Run
 
-You can run the agent in **two different ways**:
+You can run the agent in two modes:
 
-#### Way A: Interactive Mode (Recommended)
-Just type:
-```bash
-npm start
-```
-The screen will ask you: `What should I do? → `. Type your command, hit Enter, and watch the agent work!
+### 1. Standard Mode (Worker Only)
+The agent executes the task in a single session and stops when finished.
+*   **Interactive**: `npm start` (choose `N` when asked about 24/7 mode)
+*   **Direct Task**: `node src/index.js "Write a hello world script in JS"`
 
-#### Way B: Direct Mode
-You can pass the task directly inside the command:
-```bash
-node src/index.js "Write a hello world function in JavaScript and save it to test.js"
-```
+### 2. 🎬 24/7 Autonomous Mode (Director Supervised)
+The Director AI will supervise, evaluate, write sub-tasks, run tests, and guide the worker autonomously until the goal is fully achieved.
+*   **Interactive**: `npm start` (choose `Y` when asked about 24/7 mode)
+*   **Direct Task**: `node src/index.js "Create a fully functional calculator app with tests and run it" --autonomous`
 
 ---
 
-## 💡 Example Tasks You Can Ask
+## 🛠 Tools in the Toolbox
 
-Here are some real examples of what the agent can do for you:
-
-* **Write code**: `"Create an index.js file with an Express server on port 3000"`
-* **Read and explain**: `"Explore this project and explain what src/tools.js does"`
-* **Find and replace**: `"Search for all instances of '2+2' in the codebase and change them to '4'"`
-* **Debug and Fix**: `"Run node test.js, see why it's failing, and fix the bug"`
-
----
-
-## 🛠 Tools in the Agent's Toolbox
-
-The agent uses these tools automatically behind the scenes to interact with your codebase:
-
-| Tool | What it does |
-|------|-------------|
-| **`read_file`** | Reads file contents (helps the agent study your code). |
-| **`write_file`** | Writes/edits code files (helps the agent implement features). |
-| **`list_dir`** | Shows files and folders in the workspace (ignores `node_modules` automatically). |
-| **`grep_search`** | Searches for specific text patterns across all files. |
-| **`run_command`** | Executes any terminal command (like `npm test`, `git log`, etc.). |
-
----
-
-## 📂 How to use this on your own codebase
-
-If you want the agent to work on a different project (your own repository):
-
-### Option A: The Subfolder Way (Easiest)
-1. Clone this repository into a folder called `agent` inside your own project:
-   ```bash
-   git clone https://github.com/Electroiscoding/reactsystemlearning1.git agent
-   ```
-2. Open the `agent/.env` file and add the `WORKDIR` variable pointing to your project (the parent folder):
-   ```env
-   API_KEY=your_openrouter_key
-   BASE_URL=https://openrouter.ai/api/v1
-   MODEL=openrouter/free
-   WORKDIR=../
-   ```
-3. Run the agent inside the `agent` folder:
-   ```bash
-   cd agent && npm install && npm start
-   ```
-
-*Because `WORKDIR=../` is set, the agent will automatically read, write, and run commands in your parent project folder!*
-
----
-
-### Option B: The Copy-Paste Way
-Just copy the `src/` folder, `.env` file, and merge the dependencies in `package.json` directly into the root folder of your project. Then run:
-```bash
-node src/index.js "Find all bugs"
-```
+| Tool | Mode | Description |
+|------|------|-------------|
+| `index_codebase` | Read | Generates/updates `.agent_index.json` with class, function, and file structures. |
+| `read_file` | Read | Reads file contents with precise line numbers. |
+| `write_file` | Write | Writes complete content to new files (auto-creates directories). |
+| `patch_file` | Write | Space-sensitive partial block edits to existing files. **Extremely token-efficient.** |
+| `list_dir` | Read | Lists files in workspace (ignores `node_modules`, `.git`, and self-hides). |
+| `grep_search` | Read | Searches for regex patterns across files. |
+| `run_command` | Execute | Executes shell commands with a 30s timeout (dangerous commands require confirmation). |
 
 ---
 
 ## 🔒 Safety & Guardrails
-Because the agent can run commands on your terminal, we built in safety rails:
-* **Workspace Isolation & Self-Hiding**: If you clone the agent into a subfolder (like `/agent`), the agent programmatically hides its own directory from its `list_dir` and `grep_search` tools. The AI never sees its own source code, preventing it from getting distracted or editing its own files.
-* **Dangerous Commands**: If the agent tries to run a command containing `rm -rf`, `sudo`, `kill`, etc., it will stop and ask for your permission: `Allow execution? (y/N)`.
-* **Timeout Limits**: Terminal commands automatically timeout after 30 seconds to prevent hanging.
-* **Infinite Loop Prevention**: The agent will automatically stop after 30 steps if it gets stuck.
+
+*   **Workspace Isolation & Self-Hiding**: If cloned as a subdirectory (like `/agent`), the agent programmatically filters out its own directory from `list_dir` and `grep_search`. The AI cannot see, read, or alter its own code, preventing folder-trap loops.
+*   **Dangerous Command Blocking**: Shell commands containing `rm -rf`, `sudo`, `kill`, etc. require manual interactive approval.
+*   **Timeout & Step Caps**: Terminal commands automatically time out after 30 seconds. Worker agents are hard-capped at 30 steps per sub-task.

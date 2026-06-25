@@ -20,7 +20,7 @@ function getClient() {
       apiKey: API_KEY,
       baseURL: BASE_URL,
       defaultHeaders: {
-        "HTTP-Referer": "https://github.com/Electroiscoding/reactsystemlearning1",
+        "HTTP-Referer": "https://xerv.netlify.app/",
         "X-Title": "ReAct SWE Agent",
       },
     });
