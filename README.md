@@ -64,6 +64,21 @@ npm install
 
 This installs three packages: `openai` (API client), `dotenv` (env loading), and `chalk` (terminal colors).
 
+### Updating Existing Clones (from old repository name)
+
+If you previously cloned the repository under its old name (`reactsystemlearning1`), you can update your local copy to point to the new URL and pull the latest features (including streaming fixes and branding) with:
+
+```bash
+# 1. Update the remote URL to the new name
+git remote set-url origin https://github.com/Electroiscoding/Swades-Agent.git
+
+# 2. Pull the latest code from the main branch
+git pull origin main
+
+# 3. Update dependencies
+npm install
+```
+
 ### Step 3: Configure your Environment
 
 **Mac / Linux:**
