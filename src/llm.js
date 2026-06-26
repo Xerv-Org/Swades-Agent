@@ -17,7 +17,7 @@ function getClient() {
       apiKey: API_KEY,
       baseURL: BASE_URL,
       defaultHeaders: {
-        "HTTP-Referer": "https://swades-agent.dev/",
+        "HTTP-Referer": "https://xerv.netlify.app/swades.html",
         "X-Title": "Swades Agent",
       },
     });
