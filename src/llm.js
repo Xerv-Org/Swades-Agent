@@ -36,9 +36,9 @@ function getClient() {
  *                               Called per token while streaming.
  * @returns {Object} - Reconstructed assistant message (same shape as non-streaming response)
  */
-export async function callLLM(messages, tools, onChunk) {
+export async function callLLM(messages, tools, onChunk, modelOverride) {
   const params = {
-    model: MODEL,
+    model: modelOverride || MODEL,
     messages,
     temperature: 0,
     stream: true,

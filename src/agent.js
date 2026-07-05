@@ -1,9 +1,4 @@
-// ============================================================
-// agent.js — The ReAct loop orchestrator (the "brain")
-// ============================================================
-//
-//   THINK  →  ACT  →  OBSERVE  →  repeat
-//
+// agent.js — ReAct loop orchestrator (THINK → ACT → OBSERVE)
 
 import chalk from "chalk";
 import { existsSync } from "node:fs";
@@ -16,181 +11,109 @@ import { getMemoryContext, recordSession } from "./memory.js";
 
 /**
  * Run the ReAct agentic loop.
- *
- * @param {string} task - The user's task description
- * @param {number} maxSteps - Max loop iterations (safety cap)
- * @returns {string} - The agent's final answer
+ * @param {string} task - User's task
+ * @param {number} maxSteps - Safety cap
+ * @param {Array} existingMessages - Continue from existing conversation
+ * @returns {string} - Final answer
  */
 export async function runAgent(task, maxSteps, existingMessages) {
   const max = maxSteps || parseInt(process.env.MAX_STEPS) || 30;
-
   let messages = existingMessages;
 
   if (!messages) {
-    // Resolve active workspace directory
     const workdir = process.env.WORKDIR || process.cwd();
     const resolvedWorkdir = resolve(workdir);
 
-    // Print a helpful warning if running nested without WORKDIR configured
-    if (!process.env.WORKDIR) {
-      const parentDir = resolve(process.cwd(), "..");
-      const hasParentGit = existsSync(resolve(parentDir, ".git"));
-      const hasParentPackage = existsSync(resolve(parentDir, "package.json"));
-      if (parentDir !== process.cwd() && (hasParentGit || hasParentPackage)) {
-        console.log(chalk.yellow.bold("\n⚠️  Note: You are running the agent inside a subdirectory."));
-        console.log(chalk.yellow(`   If you want to target your parent project, add ${chalk.cyan("WORKDIR=../")} to your .env file.\n`));
-      }
-    }
-
-    // Load codebase index if it exists (implements next-gen indexing)
+    // Load codebase index if available
     let indexContext = "";
     const indexFile = resolve(resolvedWorkdir, ".agent_index.json");
     if (existsSync(indexFile)) {
       try {
-        const indexRaw = await readFile(indexFile, "utf-8");
-        const index = JSON.parse(indexRaw);
-        const filesList = Object.keys(index.files);
-        if (filesList.length > 0) {
-          indexContext = `\n\n## CODEBASE STRUCTURE (Auto-Indexed)
-You have immediate knowledge of the repository structure. Use this to locate files directly without scanning:
-${filesList.map(f => {
-  const struct = index.files[f].structure || { functions: [], classes: [] };
-  const details = [];
-  if (struct.classes?.length) details.push(`classes: [${struct.classes.join(", ")}]`);
-  if (struct.functions?.length) details.push(`funcs: [${struct.functions.join(", ")}]`);
-  return `- ${f} (${details.join("; ") || "generic text file"})`;
-}).join("\n")}`;
+        const index = JSON.parse(await readFile(indexFile, "utf-8"));
+        const files = Object.keys(index.files);
+        if (files.length > 0) {
+          indexContext = `\n\n## CODEBASE STRUCTURE\n${files.map(f => {
+            const s = index.files[f].structure || { functions: [], classes: [] };
+            const d = [];
+            if (s.classes?.length) d.push(`classes: [${s.classes.join(", ")}]`);
+            if (s.functions?.length) d.push(`funcs: [${s.functions.join(", ")}]`);
+            return `- ${f} (${d.join("; ") || "file"})`;
+          }).join("\n")}`;
         }
-      } catch (err) {
-        console.log(chalk.red(`⚠️  Failed to load codebase index: ${err.message}`));
+      } catch (e) {
+        console.log(chalk.dim(`⚠ Index load failed: ${e.message}`));
       }
     }
 
-    // Load memory from previous sessions
     const memoryContext = await getMemoryContext();
 
-    // Dynamically inject workspace and codebase context into the system prompt
-    const workspaceContext = `\n\n## ACTIVE WORKSPACE
-Your active workspace directory is: ${resolvedWorkdir}
-All tool operations (reading, writing, patching, grep, shell commands) are automatically executed relative to this folder.
-Note: The agent's own code folder is completely hidden from your toolbox. You are operating strictly on the user's project codebase.`;
+    const workspaceContext = `\n\n## WORKSPACE\nActive directory: ${resolvedWorkdir}\nAll tool operations run relative to this folder.`;
 
-    const systemPrompt = SYSTEM_PROMPT + workspaceContext + indexContext + memoryContext;
-
-    // Initialize conversation with system prompt + user task
     messages = [
-      { role: "system", content: systemPrompt },
+      { role: "system", content: SYSTEM_PROMPT + workspaceContext + indexContext + memoryContext },
       { role: "user", content: task },
     ];
   }
 
-  // Track which tools are used this session (for memory)
   const toolsUsed = new Set();
 
-  console.log(chalk.cyan.bold("\n🤖 Agent started\n"));
-  console.log(chalk.dim(`   Model: ${MODEL}`));
-  console.log(chalk.dim(`   Max steps: ${max}`));
-  console.log(chalk.dim(`   Memory: ${messages[0].content.includes("MEMORY") ? "loaded" : "none"}`));
-  console.log(chalk.dim(`   Task: ${task || "Continuous conversation loop"}\n`));
-  console.log(chalk.dim("─".repeat(60)) + "\n");
+  console.log(chalk.cyan.bold("\n🤖 Agent started"));
+  console.log(chalk.dim(`   Model: ${MODEL} | Steps: ${max} | Task: ${task || "continuing"}\n`));
 
   for (let step = 1; step <= max; step++) {
-    console.log(chalk.yellow.bold(`⚡ Step ${step}/${max}`));
+    console.log(chalk.yellow(`⚡ Step ${step}/${max}`));
 
-    // ---- 1. THINK + ACT: Ask the LLM what to do next with live streaming ----
     let response;
-    let printedHeader = false;
-    
-    const onChunk = (chunk) => {
-      if (chunk.type === "content") {
-        if (!printedHeader) {
-          process.stdout.write(chalk.blue.bold("💭 Thinking: "));
-          printedHeader = true;
-        }
-        process.stdout.write(chalk.blue(chunk.text));
-      } else if (chunk.type === "tool_name") {
-        if (!printedHeader) {
-          // If model skipped reasoning and went straight to tool calls
-          printedHeader = true;
-        }
-        // Tool name streaming
-        if (chunk.name) {
-          process.stdout.write(chalk.magenta(chunk.name));
-        }
-      } else if (chunk.type === "tool_args") {
-        // Tool arguments streaming (rendered in grey)
-        if (chunk.args) {
-          process.stdout.write(chalk.gray(chunk.args));
-        }
-      }
-    };
+    let header = false;
 
     try {
-      // Execute streamed LLM call
-      response = await callLLM(messages, TOOL_SCHEMAS, onChunk);
-      console.log(); // Print final newline after stream completes
+      response = await callLLM(messages, TOOL_SCHEMAS, (chunk) => {
+        if (chunk.type === "content") {
+          if (!header) { process.stdout.write(chalk.blue("💭 ")); header = true; }
+          process.stdout.write(chalk.blue(chunk.text));
+        } else if (chunk.type === "tool_name" && chunk.name) {
+          process.stdout.write(chalk.magenta(`\n   🔧 ${chunk.name}`));
+        } else if (chunk.type === "tool_args" && chunk.args) {
+          process.stdout.write(chalk.gray(chunk.args));
+        }
+      });
+      console.log();
     } catch (err) {
-      console.log(chalk.red(`\n❌ LLM error: ${err.message}\n`));
-      if (step < max) {
-        console.log(chalk.yellow("   Retrying...\n"));
-        continue;
-      }
-      return `Agent stopped due to LLM error: ${err.message}`;
+      console.log(chalk.red(`\n   ❌ ${err.message}`));
+      if (step < max) { console.log(chalk.yellow("   Retrying...\n")); continue; }
+      return `Agent error: ${err.message}`;
     }
 
-    // Add assistant message to history
     messages.push(response);
 
-    // ---- 2. If the LLM responded with text (no tool calls) → done ----
-    if (!response.tool_calls || response.tool_calls.length === 0) {
+    // No tool calls → final answer
+    if (!response.tool_calls?.length) {
       const answer = response.content || "(no response)";
-      console.log(chalk.green("\n💬 Agent response:\n"));
+      console.log(chalk.green("\n💬 Answer:\n"));
       console.log(answer);
-      console.log(chalk.dim("\n" + "─".repeat(60)));
-      console.log(chalk.green.bold("\n✅ Agent finished\n"));
-
-      // Save to memory
+      console.log(chalk.green.bold("\n✅ Done\n"));
       await recordSession(task, answer, [...toolsUsed]);
-
       return answer;
     }
 
-    // ---- 3. OBSERVE: Execute each tool call ----
-    console.log(chalk.magenta(`\n   🔧 Executing tool calls...`));
-
+    // Execute tools
     for (const toolCall of response.tool_calls) {
       const { name, arguments: args } = toolCall.function;
       toolsUsed.add(name);
+      console.log(chalk.magenta(`   → ${name}`));
 
-      console.log(chalk.magenta(`   👉 Running ${name}...`));
-
-      // Execute the tool
       const result = await executeTool(name, args);
+      const preview = result.length > 200 ? result.slice(0, 200) + chalk.dim(`... (${result.length} chars)`) : result;
+      console.log(chalk.gray(`   ${preview.split("\n").join("\n   ")}\n`));
 
-      // Preview the result (truncated for console)
-      const preview =
-        result.length > 300
-          ? result.slice(0, 300) + chalk.dim(`\n   ... (${result.length} chars total)`)
-          : result;
-      console.log(chalk.gray(`   📋 Observation:\n   ${preview.split("\n").join("\n   ")}\n`));
-
-      // ---- 4. Feed observation back into the conversation ----
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: result,
-      });
+      messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
     }
 
-    console.log(chalk.dim("─".repeat(60)) + "\n");
+    console.log(chalk.dim("─".repeat(50)));
   }
 
-  // Safety: max steps reached
-  const msg = `⚠️  Agent hit the ${max}-step limit. Stopping to prevent infinite loops.`;
+  const msg = `⚠ Hit ${max}-step limit.`;
   console.log(chalk.red.bold(`\n${msg}\n`));
-
-  // Save to memory even on timeout
   await recordSession(task, msg, [...toolsUsed]);
-
   return msg;
 }

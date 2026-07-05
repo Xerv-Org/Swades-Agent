@@ -2,3 +2,10 @@ node_modules/
 .env
 .agent_memory.json
 .agent_index.json
+bin_local/
+*.png
+*.deb
+*.log
+.mouse_position.json
+__pycache__/
+*.mp4

@@ -203,6 +203,108 @@ Both `write_file` and `patch_file` run these checks immediately after writing an
 
 ---
 
+## CUA (Computer Use Agent) Mode & Wayland Native Support
+
+Swades Agent features a graphical **Computer Use Agent (CUA)** mode, empowering the AI model to interact directly with your Linux desktop. Unlike most automation systems that fail under Wayland due to legacy X11 emulation tools (`xdotool`, `pyautogui`), Swades Agent supports native GUI automation on modern **GNOME Wayland** configurations.
+
+---
+
+### Detailed Wayland Native Architecture
+Under Wayland, the graphical environment enforces security isolation, preventing direct hardware event simulation or global pointer querying. Swades Agent bypasses this restriction by using GNOME's native Mutter remote desktop infrastructure:
+
+```mermaid
+graph TD
+    A["cua.js Orchestrator"] -->|Spawns /usr/bin/python3| B["src/cua_helper.py"]
+    B -->|Connects to Session Bus| C["D-Bus Interface"]
+    C -->|Query displays| D["org.gnome.Mutter.DisplayConfig"]
+    C -->|Create RDP Session| E["org.gnome.Mutter.RemoteDesktop"]
+    C -->|Create ScreenCast Session| F["org.gnome.Mutter.ScreenCast"]
+    E -->|Start Session| G["Input Injection Portals"]
+    G -->|NotifyPointerMotionAbsolute| H["Move Mouse"]
+    G -->|NotifyPointerButton| I["Click Buttons"]
+    G -->|NotifyKeyboardKeysym| J["Type/Press Keys"]
+    G -->|NotifyPointerAxisDiscrete| K["Scroll Wheel"]
+    B -->|Persists Coordinates| L[".mouse_position.json"]
+```
+
+#### Key Architecture Components:
+1. **Mutter D-Bus Session Linking**:
+   - The helper script connects to the session bus via `gi.repository.Gio` and `GLib`.
+   - It queries `org.gnome.Mutter.DisplayConfig` to find the connector name of the primary monitor dynamically (e.g. `eDP-1`, `HDMI-1`).
+   - It initializes a RemoteDesktop session to get a unique `SessionId`.
+   - It initializes a ScreenCast session, linking it to the RemoteDesktop session via the `remote-desktop-session-id` property.
+   - It starts the ScreenCast recording on the primary monitor connector, which generates a PipeWire stream path.
+   - It starts the RemoteDesktop session. With both sessions active, absolute pointer coordinates are injected relative to the screen dimensions.
+2. **State-Based Mouse Tracking**:
+   - Because Wayland blocks querying the active mouse coordinates directly, Swades Agent maintains an internal coordinate tracking state file in `.mouse_position.json`.
+   - Every move, click, or drag updates this file.
+   - When a screenshot is taken (using standard portal screencasting), `cua_helper.py` reads the last stored coordinate from `.mouse_position.json` to draw the red target crosshair overlay at the correct place.
+3. **Graceful Fallback**:
+   - If the script is run on an X11-based session, it automatically falls back to standard `xdotool` and `pyautogui` logic, making the agent compatible with both Wayland and X11 out-of-the-box.
+
+---
+
+### Step-by-Step Installation Prerequisites (Spoonfeeding)
+To use CUA mode under a Wayland session, follow these steps to set up your environment:
+
+#### Step 1: Ensure system python has GObject bindings
+Since Node.js spawns the helper script using the system `/usr/bin/python3`, you must ensure that python has access to the GObject Introspection library.
+Run the following command to install the required package on Debian/Ubuntu-based systems:
+```bash
+sudo apt update
+sudo apt install python3-gi python3-gi-cairo
+```
+On Fedora/RHEL:
+```bash
+sudo dnf install python3-gobject
+```
+On Arch Linux:
+```bash
+sudo pacman -S python-gobject
+```
+
+#### Step 2: Enable Remote Desktop Sharing in GNOME
+Make sure your user session is authorized to run Mutter Remote Desktop sessions. In GNOME, navigate to:
+`Settings -> Sharing -> Remote Desktop` and ensure it is turned on.
+*(Note: Since the agent connects locally via the active user D-Bus session, you do not need to configure any network/port forwarding rules).*
+
+---
+
+### How to Run CUA Mode
+
+#### Method 1: Interactive Prompt (Recommended)
+1. Start the agent:
+   ```bash
+   npm start
+   ```
+2. Enter your goal when prompted (e.g. `go to notepad and type hello world and save it`).
+3. Under **Mode**, type `c` (or `cua`) and press Enter.
+
+#### Method 2: Command Line Argument
+Pass your prompt and add the `--cua` or `-c` flag:
+```bash
+node src/index.js "go to notepad and type hello world" --cua
+```
+
+---
+
+### Advanced Click-Loop Safety Guardrail
+To safeguard against models getting stuck in infinite loops (for example, clicking the same spot repeatedly on a frozen or unresponsive GUI element), Swades Agent implements a strict **repeat click prevention check** directly inside the orchestrator ([cua.js](file:///home/soham/reactsystemlearning1/src/cua.js)):
+
+1. **Bounding Box Proximity**: Clicks are tracked by their coordinates. Any click that falls within a **25px horizontal and 15px vertical bounding box** of a previous click is classified as being in the "same area".
+2. **Consecutive Block**: The model is forbidden from clicking the same area consecutively (back-to-back). If it attempts to do so:
+   - The click is blocked.
+   - The terminal displays a red warning: `❌ Declined: Cannot click in the same place consecutively (back-to-back).`
+   - An error message is returned to the model as tool output: `Declined: You cannot click the same area consecutively...`
+3. **Overall Frequency Limit**: The model is forbidden from clicking the same area more than **2 times overall** throughout the entire task execution. If a third click is attempted:
+   - The click is blocked.
+   - The terminal displays a red warning: `❌ Declined: Clicked this place more than twice overall.`
+   - An error message is returned to the model as tool output: `Declined: You have already clicked this same area 2 times...`
+
+This feedback forces the model to self-correct, try alternative UI pathways, or scroll/navigate elsewhere, breaking infinite loops and saving token costs.
+
+---
+
 ## Architecture
 
 ```
@@ -264,13 +366,15 @@ On the next run, the three most recent sessions are injected into the system pro
 
 ---
 
-## What's New in v2.0
+## What's New in v2.0 & v2.1
 
-- **24/7 Director Loop** — autonomous multi-cycle execution with a supervising Director model. Pass `--autonomous` to any task.
-- **Codebase Indexing** — automatic `index_codebase` run at startup generates `.agent_index.json` with the full repository structure so the model starts with deep context.
-- **Partial File Patching** — `patch_file` tool for surgical block-level edits. Preserves exact indentation. Saves significant tokens vs. full-file rewrites.
-- **Static Syntax Guardrails** — automatic bracket matching, indentation checks, `node --check`, and JSON parse validation on every file save, with errors returned to the model for self-correction.
-- **Real-time Token Streaming** — LLM reasoning, tool names, and arguments stream to the terminal token-by-token using OpenAI SDK SSE.
-- **JSONL System Prompt** — system instructions structured as JSON Lines for high-precision instruction following by reasoning models.
-- **Session Memory** — cross-run context via `.agent_memory.json`.
-- **Referer attribution** — all API calls include `HTTP-Referer: https://xerv.netlify.app/swades.html` for OpenRouter analytics tracking.
+- **Native Wayland GUI Support (v2.1)** — native desktop input simulation (clicking, typing, scrolling, dragging) via GNOME Mutter RemoteDesktop and ScreenCast DBus APIs. No X11 dependencies.
+- **Anti-Loop Click Protection (v2.1)** — automatic consecutive and overall frequency limits on spatial clicks (using a 25px x 15px bounding box) to prevent looping click sequences.
+- **JSON System Instructions (v2.1)** — system prompt structured as a clean, high-compliance JSON schema to enforce reasoning/ReAct rules.
+- **24/7 Director Loop (v2.0)** — autonomous multi-cycle execution with a supervising Director model. Pass `--autonomous` to any task.
+- **Codebase Indexing (v2.0)** — automatic `index_codebase` run at startup generates `.agent_index.json` with the full repository structure so the model starts with deep context.
+- **Partial File Patching (v2.0)** — `patch_file` tool for surgical block-level edits. Preserves exact indentation. Saves significant tokens vs. full-file rewrites.
+- **Static Syntax Guardrails (v2.0)** — automatic bracket matching, indentation checks, `node --check`, and JSON parse validation on every file save, with errors returned to the model for self-correction.
+- **Real-time Token Streaming (v2.0)** — LLM reasoning, tool names, and arguments stream to the terminal token-by-token using OpenAI SDK SSE.
+- **Session Memory (v2.0)** — cross-run context via `.agent_memory.json`.
+- **Referer attribution (v2.0)** — all API calls include `HTTP-Referer: https://xerv.netlify.app/swades.html` for OpenRouter analytics tracking.
