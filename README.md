@@ -211,6 +211,7 @@ Swades Agent features a graphical **Computer Use Agent (CUA)** mode, empowering 
   <video src="demo.mp4" controls width="100%" style="max-width: 800px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></video>
 </p>
 
+
 ---
 
 ### Detailed Wayland Native Architecture
