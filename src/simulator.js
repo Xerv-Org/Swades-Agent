@@ -449,6 +449,22 @@ export async function runSimulated(task, baseDir) {
   console.log(chalk.dim(`   Task: "${task.slice(0, 100)}..."`));
   console.log(chalk.dim("═".repeat(60)));
 
+  // Ensure we are inside a git repository so git worktree works
+  try {
+    await shell("git rev-parse --is-inside-work-tree", baseDir);
+  } catch (err) {
+    console.log(chalk.yellow("   ⚠ Not a git repository. Initializing git to support sandboxes..."));
+    try {
+      await shell("git init", baseDir);
+      await shell("git add -A", baseDir);
+      await shell("git commit --allow-empty -m \"Initial commit by Swades Agent\"", baseDir);
+      console.log(chalk.green("   ✅ Git repository initialized successfully."));
+    } catch (gitErr) {
+      console.log(chalk.red(`   ❌ Failed to initialize git: ${gitErr.message}. Simulation aborted.`));
+      return `Simulation failed: workspace is not a git repository and git init failed: ${gitErr.message}`;
+    }
+  }
+
   // 1. Generate scenarios
   const scenarios = await generateScenarios(task);
   console.log(chalk.cyan(`\n   📋 ${scenarios.length} scenarios generated:`));
