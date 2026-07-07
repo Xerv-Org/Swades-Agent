@@ -8,17 +8,38 @@ import { callLLM, MODEL } from "./llm.js";
 import { executeTool } from "./tools.js";
 import { SYSTEM_PROMPT, TOOL_SCHEMAS } from "./prompts.js";
 import { getMemoryContext, recordSession } from "./memory.js";
+import { runOrchestrated } from "./orchestrator.js";
+import { runSimulated } from "./simulator.js";
 
 /**
  * Run the ReAct agentic loop.
  * @param {string} task - User's task
- * @param {number} maxSteps - Safety cap
+ * @param {number} maxSteps - Safety cap (default Infinity)
  * @param {Array} existingMessages - Continue from existing conversation
  * @returns {string} - Final answer
  */
 export async function runAgent(task, maxSteps, existingMessages) {
-  const max = maxSteps || parseInt(process.env.MAX_STEPS) || 30;
+  const max = maxSteps || parseInt(process.env.MAX_STEPS) || Infinity;
   let messages = existingMessages;
+
+  // ---- Orchestrator gate (only for fresh top-level tasks) ----
+  if (!existingMessages && task && !task.startsWith("[SUBAGENT:") && !task.startsWith("[SIMULATION")) {
+    const workdir = process.env.WORKDIR || process.cwd();
+    const resolvedWorkdir = resolve(workdir);
+
+    try {
+      const orchestratorResult = await runOrchestrated(task, resolvedWorkdir);
+      if (orchestratorResult !== null) {
+        // HIGH complexity — orchestrator handled everything
+        await recordSession(task, orchestratorResult, ["orchestrator", "subagents", "simulator"]);
+        return orchestratorResult;
+      }
+    } catch (err) {
+      console.log(chalk.yellow(`   ⚠ Orchestrator eval error: ${err.message}, proceeding with single agent`));
+    }
+
+    // LOW complexity — falls through to normal ReAct loop below
+  }
 
   if (!messages) {
     const workdir = process.env.WORKDIR || process.cwd();
@@ -58,10 +79,10 @@ export async function runAgent(task, maxSteps, existingMessages) {
   const toolsUsed = new Set();
 
   console.log(chalk.cyan.bold("\n🤖 Agent started"));
-  console.log(chalk.dim(`   Model: ${MODEL} | Steps: ${max} | Task: ${task || "continuing"}\n`));
+  console.log(chalk.dim(`   Model: ${MODEL} | Steps: ${max === Infinity ? "∞" : max} | Task: ${task || "continuing"}\n`));
 
   for (let step = 1; step <= max; step++) {
-    console.log(chalk.yellow(`⚡ Step ${step}/${max}`));
+    console.log(chalk.yellow(`⚡ Step ${step}${max === Infinity ? "" : `/${max}`}`));
 
     let response;
     let header = false;

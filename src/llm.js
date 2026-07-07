@@ -42,6 +42,7 @@ export async function callLLM(messages, tools, onChunk, modelOverride) {
     messages,
     temperature: 0,
     stream: true,
+    plugins: [{ id: "context-compression" }],
   };
 
   if (tools && tools.length > 0) {

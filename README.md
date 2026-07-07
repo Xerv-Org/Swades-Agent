@@ -209,6 +209,8 @@ Swades Agent features a graphical **Computer Use Agent (CUA)** mode, empowering 
 
 <p align="center">
   <video src="demo.mp4" controls width="100%" style="max-width: 800px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"></video>
+  <br/>
+  <sub><i>If the video player above does not render in your markdown viewer, you can view the video file directly: <a href="demo.mp4"><b>demo.mp4</b></a></i></sub>
 </p>
 
 
@@ -347,8 +349,9 @@ director.js → cycle 1..N:
 
 - **Workspace isolation & self-hiding** — when installed as a subdirectory of the target project, the agent filters out its own folder from `list_dir` and `grep_search`. The model cannot see, read, or modify its own source files, which prevents it from getting confused about which codebase it is working on.
 - **Dangerous command blocking** — shell commands matching `rm -rf`, `sudo`, `kill`, `dd if=`, `chmod 777`, `:(){`, and others pause execution and require an explicit `y` typed in the terminal before running.
-- **Step cap** — the worker agent stops after `MAX_STEPS` iterations (default 30) to prevent infinite loops. This is configurable via `.env`.
-- **Director cycle cap** — the Director loop stops after 5 cycles by default.
+- **Step cap** — by default, the worker agent has NO step limit (`Infinity` steps), enabling execution of long-running or highly complex developer tasks. You can optionally cap it by setting `MAX_STEPS` in `.env`.
+- **Director cycle cap** — by default, the Director loop has NO cycle limit (`Infinity` cycles) to iteratively direct the worker agent until the overall goal is fully complete.
+- **Context Condensation** — uses OpenRouter's `context-compression` plugin to dynamically condense prompt histories when they approach context limits, preventing token overflows during long executions.
 - **Timeout** — `run_command` automatically times out after 30 seconds.
 - **Workspace scoping** — all file paths passed to tools are resolved relative to `WORKDIR`. The agent cannot access paths outside of it.
 
@@ -371,15 +374,55 @@ On the next run, the three most recent sessions are injected into the system pro
 
 ---
 
-## What's New in v2.0 & v2.1
+## 🛠️ v3.0 Advanced Features: Subagents & Simulation (Step-by-Step)
 
-- **Native Wayland GUI Support (v2.1)** — native desktop input simulation (clicking, typing, scrolling, dragging) via GNOME Mutter RemoteDesktop and ScreenCast DBus APIs. No X11 dependencies.
-- **Anti-Loop Click Protection (v2.1)** — automatic consecutive and overall frequency limits on spatial clicks (using a 25px x 15px bounding box) to prevent looping click sequences.
-- **JSON System Instructions (v2.1)** — system prompt structured as a clean, high-compliance JSON schema to enforce reasoning/ReAct rules.
-- **24/7 Director Loop (v2.0)** — autonomous multi-cycle execution with a supervising Director model. Pass `--autonomous` to any task.
-- **Codebase Indexing (v2.0)** — automatic `index_codebase` run at startup generates `.agent_index.json` with the full repository structure so the model starts with deep context.
-- **Partial File Patching (v2.0)** — `patch_file` tool for surgical block-level edits. Preserves exact indentation. Saves significant tokens vs. full-file rewrites.
-- **Static Syntax Guardrails (v2.0)** — automatic bracket matching, indentation checks, `node --check`, and JSON parse validation on every file save, with errors returned to the model for self-correction.
-- **Real-time Token Streaming (v2.0)** — LLM reasoning, tool names, and arguments stream to the terminal token-by-token using OpenAI SDK SSE.
-- **Session Memory (v2.0)** — cross-run context via `.agent_memory.json`.
-- **Referer attribution (v2.0)** — all API calls include `HTTP-Referer: https://xerv.netlify.app/swades.html` for OpenRouter analytics tracking.
+Swades Agent v3.0 introduces a robust, enterprise-grade workflow for handling complex engineering tasks cleanly and safely. Here is how it works under the hood, step-by-step:
+
+### Step 1: Automated Complexity Classification
+When you run a coding task, the orchestrator automatically evaluates it:
+* **LOW Complexity**: Simple edits, documentation tweaks, or single-file fixes. The worker agent runs directly in your workspace. **Zero overhead, no subagents spawned.**
+* **HIGH Complexity**: Multi-file refactors, new feature implementations, or large structural updates. The orchestrator triggers the parallel subagent and simulation pipelines.
+
+### Step 2: Isolated Parallel Subtask Spawning
+* The parent orchestrator breaks down the main task into 2 to 5 concrete subtasks.
+* It uses **Git Worktrees** to spin up isolated workspace directories (located under `.swades_worktrees/`).
+* Subagents run concurrently (up to 5 parallel processes, managed by a semaphore queue).
+* Since each subagent writes code in its own worktree, there is **zero risk of file corruption or dirty edits** during development.
+
+### Step 3: Git Rebase Alignment & Diff Merging
+* Once subagents complete their tasks, their changes are captured as code diff bundles.
+* The parent orchestrator merges the non-conflicting diffs back into your main workspace.
+* **Conflict Resolution**: If overlapping modifications cause git merge conflicts, a specialized **Merge-Resolution Subagent** is dynamically spawned to safely resolve the overlapping lines.
+* All temporary worktree sandboxes are pruned and deleted immediately.
+
+### Step 4: Multi-Scenario Sandbox Simulation
+* Before committing simulated changes to real-life files, the Simulation Engine generates **2 to 4 alternative implementation scenarios** representing different architectural strategies.
+* Each scenario is run inside its own transient sandbox directory (`.swades_sandboxes/`).
+* The engine compiles the code in each sandbox (verifying JS syntax with `node --check` and project builds with `package.json` scripts) and runs automated test suites.
+* The LLM reviews the results and selects the single **best-performing winner scenario** (based on diff cleanliness and compilation/test success).
+
+### Step 5: The Promotion Pipeline (Sandbox to Real Life)
+Once a scenario is chosen, it goes through three safety gates:
+1. **Workspace Git Rebase Check**: Verifies the main repository hasn't moved forward. If it has, it performs an automatic non-destructive git rebase.
+2. **Shadow Verification**: Applies the winning diff to a clean temporary verification worktree and executes builds to guarantee 100% correctness.
+3. **Live Workspace Mutation**: Applies the verified diff to your active workspace, creating clean, compilation-passing modifications.
+4. **Telemetry Delta Report**: Generates `.swades_simulation_report.json` showcasing simulated expectations vs. final verified real-life outcome.
+
+---
+
+## What's New in v3.0, v2.1 & v2.0
+
+* **Subagent Orchestration System (v3.0)** — task decomposition, parallel execution in isolated Git worktrees, and automated conflict resolution.
+* **Sandbox Simulation Engine (v3.0)** — multi-scenario sandbox runs, LLM verdict selection, and a 3-step promotion pipeline (Rebase → Shadow Verify → Live Apply).
+* **Infinite Step / Cycle Budgets (v3.0)** — removed hard step caps. The agent can run indefinitely to solve complex objectives.
+* **OpenRouter Context Compression (v3.0)** — integration of the OpenRouter `context-compression` plugin to prevent token overflows on unbounded histories.
+* **Native Wayland GUI Support (v2.1)** — native desktop input simulation (clicking, typing, scrolling, dragging) via GNOME Mutter RemoteDesktop and ScreenCast DBus APIs. No X11 dependencies.
+* **Anti-Loop Click Protection (v2.1)** — automatic consecutive and overall frequency limits on spatial clicks (using a 25px x 15px bounding box) to prevent looping click sequences.
+* **JSON System Instructions (v2.1)** — system prompt structured as a clean, high-compliance JSON schema to enforce reasoning/ReAct rules.
+* **24/7 Director Loop (v2.0)** — autonomous multi-cycle execution with a supervising Director model. Pass `--autonomous` to any task.
+* **Codebase Indexing (v2.0)** — automatic `index_codebase` run at startup generates `.agent_index.json` with the full repository structure so the model starts with deep context.
+* **Partial File Patching (v2.0)** — `patch_file` tool for surgical block-level edits. Preserves exact indentation. Saves significant tokens vs. full-file rewrites.
+* **Static Syntax Guardrails (v2.0)** — automatic bracket matching, indentation checks, `node --check`, and JSON parse validation on every file save, with errors returned to the model for self-correction.
+* **Real-time Token Streaming (v2.0)** — LLM reasoning, tool names, and arguments stream to the terminal token-by-token using OpenAI SDK SSE.
+* **Session Memory (v2.0)** — cross-run context via `.agent_memory.json`.
+* **Referer attribution (v2.0)** — all API calls include `HTTP-Referer: https://xerv.netlify.app/swades.html` for OpenRouter analytics tracking.

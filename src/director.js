@@ -27,10 +27,10 @@ RULES:
  * @param {number} maxCycles - Safety cap on Director loops
  * @returns {string} - Final completion status
  */
-export async function runDirector(globalGoal, maxCycles = 5) {
+export async function runDirector(globalGoal, maxCycles = Infinity) {
   console.log(chalk.green.bold("\n🎬 Director AI Activated (24/7 Autonomous Mode)"));
   console.log(chalk.dim(`   Global Goal: "${globalGoal}"`));
-  console.log(chalk.dim(`   Max cycles: ${maxCycles}\n`));
+  console.log(chalk.dim(`   Max cycles: ${maxCycles === Infinity ? "∞" : maxCycles}\n`));
   console.log(chalk.dim("═".repeat(60)) + "\n");
 
   // Resolve active workspace directory and load memory
@@ -52,7 +52,7 @@ Note: The agent's own code folder is completely hidden from your toolbox. You ar
   ];
 
   for (let cycle = 1; cycle <= maxCycles; cycle++) {
-    console.log(chalk.green.bold(`\n🎬 [Director Cycle ${cycle}/${maxCycles}]`));
+    console.log(chalk.green.bold(`\n🎬 [Director Cycle ${cycle}${maxCycles === Infinity ? "" : `/${maxCycles}`}]`));
 
     // 1. Run the Worker Agent using the continuous conversation history
     console.log(chalk.cyan(`👷 Worker Agent starting...`));
