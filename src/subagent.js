@@ -134,7 +134,7 @@ export async function runSubagent(label, description, baseDir) {
 
     // Run the ReAct agent — give it a generous but finite step budget per subtask
     const prefixedTask = `[SUBAGENT: ${label}]\n\n${description}\n\nYou are operating in an isolated workspace. Make all necessary changes to complete this subtask.`;
-    const summary = await runAgent(prefixedTask, 50);
+    const summary = await runAgent(prefixedTask, Infinity);
 
     // Capture the diff
     const diff = await captureWorktreeDiff(worktreePath);

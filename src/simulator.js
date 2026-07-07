@@ -127,7 +127,7 @@ export async function runSandbox(scenario, task, baseDir) {
 
     // Run the agent with scenario-specific instructions
     const scenarioTask = `[SIMULATION — Scenario ${scenario.id}]\n\nGlobal Task: ${task}\n\nYour specific approach for this scenario:\n${scenario.strategy}\n\nImplement this approach completely. This is a sandboxed simulation — make all necessary changes.`;
-    const summary = await runAgent(scenarioTask, 40);
+    const summary = await runAgent(scenarioTask, Infinity);
 
     // Capture diff
     const diff = await captureSandboxDiff(sandboxPath);
