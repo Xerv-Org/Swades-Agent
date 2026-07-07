@@ -17,8 +17,8 @@ import { runSimulated } from "./simulator.js";
 function shell(cmd, cwd) {
   return new Promise((resolve, reject) => {
     exec(cmd, { cwd, maxBuffer: 10 * 1024 * 1024, timeout: 120000 }, (err, stdout, stderr) => {
-      if (err && !stdout) return reject(new Error(stderr || err.message));
-      resolve((stdout || "") + (stderr ? `\n${stderr}` : ""));
+      if (err) return reject(new Error(stderr || stdout || err.message));
+      resolve(stdout || "");
     });
   });
 }
