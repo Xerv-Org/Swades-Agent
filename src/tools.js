@@ -25,7 +25,8 @@ const DANGEROUS_PATTERNS = [
 // ---- Helpers ----
 
 function getWorkdir() {
-  return process.env.WORKDIR || process.cwd();
+  const dir = process.env.WORKDIR || process.cwd();
+  return existsSync(dir) ? dir : process.cwd();
 }
 
 function resolvePath(p) {
@@ -401,7 +402,10 @@ async function listDirTool({ path, recursive }) {
 }
 
 async function runCommandTool({ command, cwd }) {
-  const workdir = cwd ? resolvePath(cwd) : getWorkdir();
+  let workdir = cwd ? resolvePath(cwd) : getWorkdir();
+  if (!existsSync(workdir)) {
+    workdir = process.cwd();
+  }
 
   // Safety check for dangerous commands
   const isDangerous = DANGEROUS_PATTERNS.some((p) =>
