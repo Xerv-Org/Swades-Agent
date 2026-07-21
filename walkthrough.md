@@ -1,43 +1,54 @@
 # Swades Agent v3.1: The Ultimate Operational Developer Manual & Tutorial
 
-This manual is the definitive operational guide for **Swades Agent v3.1**. It is written for developers and operators to explain how to configure, command, interact with, monitor, and troubleshoot the agent. 
+---
+
+## Chapter 1: Introduction & Operational Philosophy
+
+Swades Agent is a terminal-native, autonomous software engineering agent designed to run directly within your codebase. Unlike web-based coding assistants that operate in isolated clouds or require copying and pasting code, Swades Agent executes commands directly in your local environment, making surgical file edits, running shell tasks, and managing background services.
+
+### 1.1 Developer Experience (DX) Philosophy
+Swades Agent is built to behave like a human engineer working inside a terminal:
+- **Think-Before-Write**: Before making code edits, the agent analyzes file imports, functions, and layout structures to avoid syntax corruption.
+- **Strict Verification Gates**: Modified files are validated at write-time. The linter automatically repairs unclosed brackets, formatting, or JSON syntax issues before the compiler executes.
+- **Asynchronous Execution**: Long-running tests, server builds, or package installs run in detached background terminals, keeping the main CLI loop responsive.
+- **Time and Cost Safety**: The agent estimates a time budget at startup. It monitors a visual countdown timer and can request deadline extensions to prevent infinite execution loops.
 
 ---
 
-## 📋 Section 1: System Requirements & Installation
+## Chapter 2: System Installation & Configuration
 
-Before running Swades Agent, your system must have the correct runtimes and prerequisites configured.
+Follow this checklist to configure Swades Agent inside your workspace.
 
-### 1.1 Node.js Prerequisites
-- **Version Required**: Node.js v18.0.0 or later (v22.x is highly recommended for faster JSON parsing and native fetch performance).
-- **Verification**: Check your active versions by running:
+### 2.1 Runtime Prerequisites
+- **Node.js**: Version 18.0.0 or later is required (v22.x or later is recommended).
+- **Git**: Version 2.30 or later is required to run subagents and sandbox simulations.
+- **System Check**:
   ```bash
   node -v
   npm -v
+  git --version
   ```
 
-### 1.2 Installation Steps
+### 2.2 Project Setup
 Clone or copy the Swades Agent directory into your target workspace, then execute:
 ```bash
 npm install
 ```
-This installs the following dependencies locally:
-1. `openai`: Handles API streaming connections and tool schema callbacks.
-2. `dotenv`: Loads environment configurations from `.env` files.
-3. `chalk`: Adds color-coding to terminal countdowns, urgency statuses, and errors.
+This command installs the three core NPM modules locally:
+- `openai`: Manages communication with OpenAI-compatible API endpoints and parses SSE token streams.
+- `dotenv`: Loads environment configurations from your local `.env` file into `process.env`.
+- `chalk`: Formats and color-codes terminal logs (e.g. countdown bars, tool indicators, errors).
 
 ---
 
-## ⚙️ Section 2: Environment Configuration (`.env`)
+### 2.3 Comprehensive `.env` Variable Reference
 
-Create your active environment configuration by copying the template file:
+Create your environment configuration file:
 ```bash
 cp .env.example .env
 ```
 
 Open `.env` in a text editor to configure the parameters below.
-
-### 2.1 Configuration Key Reference
 
 | Variable Name | Required | Default Value | Description |
 |---|---|---|---|
@@ -52,31 +63,30 @@ Open `.env` in a text editor to configure the parameters below.
 
 ---
 
-### 2.2 Provider Setup Templates
+### 2.4 LLM Provider Setup Profiles
 
-#### A. OpenRouter Configuration (Cloud API)
-Recommended for accessing Claude 3.5 Sonnet or Llama-3.3:
+#### Profile A: OpenRouter Setup (Cloud Model API)
 ```env
-API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+API_KEY=sk-or-v1-your-openrouter-key-here
 BASE_URL=https://openrouter.ai/api/v1
-MODEL=anthropic/claude-3.5-sonnet
+MODEL=meta-llama/llama-3.3-70b-instruct
 ```
 
-#### B. OpenAI Configuration
+#### Profile B: OpenAI Setup
 ```env
-API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+API_KEY=sk-proj-your-openai-key-here
 BASE_URL=https://api.openai.com/v1
 MODEL=gpt-4o
 ```
 
-#### C. Groq Configuration
+#### Profile C: Groq Setup
 ```env
-API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+API_KEY=gsk_your-groq-key-here
 BASE_URL=https://api.groq.com/openai/v1
 MODEL=llama-3.3-70b-versatile
 ```
 
-#### D. Local Ollama Configuration (Offline/Private)
+#### Profile D: Local Ollama Setup (Offline/Private)
 Ensure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull qwen2.5-coder:7b`):
 ```env
 API_KEY=ollama
@@ -86,18 +96,18 @@ MODEL=qwen2.5-coder:7b
 
 ---
 
-## 🏁 Section 3: How to Run the Agent
+## Chapter 3: The Command Interface (Modes & Syntax)
 
-You can start the agent interactively or pass tasks directly through the CLI.
+You can launch tasks interactively or pass prompts directly as command-line arguments.
 
 ### 3.1 Interactive Dashboard Mode
 Run the command:
 ```bash
 npm start
 ```
-The terminal will guide you through the setup:
+The terminal will display the configuration menu:
 1. **Task →**: Enter your prompt (e.g. *"create a basic express app in src/server.js"*).
-2. **Image path/URL (optional) →**: Provide a path to a layout image/mockup if you are using a vision-capable model.
+2. **Image path/URL (optional) →**: Provide a path or web URL to a layout image/mockup if you are using a vision-capable model.
 3. **Mode? →**: Select your execution mode:
    - `c` (or `cua`): Desktop GUI automation.
    - `a` (or `autonomous`): Director-supervised multi-cycle development loops.
@@ -125,7 +135,7 @@ node src/index.js "Write unit tests for auth.js, run them, and fix any failures"
 #### CUA Mode (Computer Use Agent)
 Spawns Wayland GUI mode to open a web browser or desktop app:
 ```bash
-node src/index.js "Open Chrome, go to npmjs.com, and search for lodash" --cua
+node src/index.js "Open Chrome and search for Node.js docs" --cua
 ```
 
 #### Subagents Mode
@@ -142,7 +152,7 @@ node src/index.js "Analyze this layout and implement it in index.html" --image m
 
 ---
 
-## ⏰ Section 4: Dynamic Timer & Urgency Pressure System
+## Chapter 4: Dynamic Timer & Urgency Pressure System
 
 The countdown timer manager prevents the agent from getting stuck in infinite loops.
 
@@ -196,7 +206,7 @@ This resets the timers and returns the agent to a CALM state.
 
 ---
 
-## 🛠️ Section 5: The Self-Healing Linter & Indentation Rules
+## Chapter 5: The Self-Healing Linter & Indentation Rules
 
 When the agent writes files, syntax guardrails prevent code corruption.
 
@@ -222,7 +232,7 @@ Indentation warnings are only enabled for indentation-sensitive files:
 
 ---
 
-## 💻 Section 6: Background Process Management (`peek_terminal`)
+## Chapter 6: Background Process Management (`peek_terminal`)
 
 If a command takes longer than 30 seconds (e.g. running a compile step or dev server), the agent detaches the task to run in the background.
 
@@ -242,7 +252,7 @@ If a background server or test loop gets stuck:
 
 ---
 
-## 🐧 Section 7: Wayland Native GUI (CUA Mode) Setup
+## Chapter 7: Wayland Native GUI (CUA Mode) Setup
 
 CUA mode allows the agent to control your desktop. For safety under modern Linux installations, set up the following:
 
@@ -284,7 +294,7 @@ To prevent click loops:
 
 ---
 
-## 👥 Section 8: Subagents & Sandbox Simulations
+## Chapter 8: Subagents & Sandbox Simulations
 
 For complex refactoring, Swades Agent orchestrates multiple tasks in isolated workspaces.
 
@@ -304,7 +314,7 @@ Before applying modifications to your live workspace files, the engine generates
 
 ---
 
-## 🩺 Section 9: Troubleshooting & FAQ
+## Chapter 9: Troubleshooting & FAQ
 
 #### Q: The agent gets stuck in a loop trying to patch a file.
 * **Solution**: Ensure your target block matches the file content exactly. You can read the target file using `read_file` with a line range to confirm its indentation.
