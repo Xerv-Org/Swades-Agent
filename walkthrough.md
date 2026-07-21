@@ -6,6 +6,35 @@ It covers every configuration setup, environment variable, prompt recipe, countd
 
 ---
 
+## ⚡ Quick Start & Initial Setup
+
+Before diving into the detailed operational chapters, here is the immediate setup required to get Swades Agent running (extracted directly from the core README).
+
+### Step 1: Install Node.js
+You need **Node.js v18 or later** (v22 recommended).
+```bash
+node -v
+```
+If not installed, download from [nodejs.org](https://nodejs.org/) or use a version manager like `nvm`.
+
+### Step 2: Clone & Install Dependencies
+```bash
+git clone https://github.com/Electroiscoding/Swades-Agent.git
+cd Swades-Agent
+npm install
+```
+This installs the required core packages: `openai`, `dotenv`, and `chalk`.
+
+### Updating Existing Clones
+If you cloned the old repo name (`reactsystemlearning1`), update it:
+```bash
+git remote set-url origin https://github.com/Electroiscoding/Swades-Agent.git
+git pull origin main
+npm install
+```
+
+---
+
 ## Chapter 1: Operational Philosophy & System Design
 
 Swades Agent is a terminal-native, autonomous software engineering agent built to run directly on your workspace. Instead of isolating your execution inside closed, virtualized cloud environments or requiring tedious copy-pasting of files, Swades Agent integrates directly with your local system utilities. It edits source files surgically, triggers tests, queries databases, builds applications, and monitors running servers without leaving your terminal.
