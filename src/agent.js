@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import { callLLM, MODEL } from "./llm.js";
-import { executeTool } from "./tools.js";
+import { executeTool, activeDeadline } from "./tools.js";
 import { SYSTEM_PROMPT, TOOL_SCHEMAS } from "./prompts.js";
 import { getMemoryContext, recordSession } from "./memory.js";
 import { runOrchestrated } from "./orchestrator.js";
@@ -133,11 +133,108 @@ export async function runAgent(task, maxSteps, existingMessages, image) {
 
   const toolsUsed = new Set();
 
+  let estimatedDurationSeconds = 180;
+  if (!existingMessages && task) {
+    console.log(chalk.dim("⏰ AI is estimating the optimal task deadline..."));
+    try {
+      const estimationPrompt = [
+        {
+          role: "system",
+          content: "You are the time estimator for Swades Agent. Estimate how many seconds this task should take to execute under ordinary circumstances. Be realistic and consider code writing, file searches, testing, and debugging. Respond with ONLY a single integer representing seconds (e.g. 120). Minimum: 30 seconds, Maximum: 600 seconds. Do not write any other text."
+        },
+        {
+          role: "user",
+          content: `Task: ${task}`
+        }
+      ];
+      const res = await callLLM(estimationPrompt);
+      const seconds = parseInt(res.content?.trim());
+      if (!isNaN(seconds) && seconds >= 30 && seconds <= 600) {
+        estimatedDurationSeconds = seconds;
+      }
+    } catch (err) {
+      console.log(chalk.dim(`   (AI time estimation failed: ${err.message}. Defaulting to 180s.)`));
+    }
+    console.log(chalk.cyan(`   (AI allocated task time: ${estimatedDurationSeconds} seconds)`));
+    
+    activeDeadline.estimatedSeconds = estimatedDurationSeconds;
+    activeDeadline.startTime = Date.now();
+  } else {
+    if (!activeDeadline.startTime) {
+      activeDeadline.startTime = Date.now();
+      activeDeadline.estimatedSeconds = 180;
+    }
+  }
+
   console.log(chalk.cyan.bold("\n🤖 Agent started"));
   console.log(chalk.dim(`   Model: ${MODEL} | Steps: ${max === Infinity ? "∞" : max} | Task: ${task || "continuing"}\n`));
 
+  let graceStepsLeft = 3;
+
   for (let step = 1; step <= max; step++) {
     console.log(chalk.yellow(`⚡ Step ${step}${max === Infinity ? "" : `/${max}`}`));
+
+    const elapsed = Math.round((Date.now() - activeDeadline.startTime) / 1000);
+    const remaining = activeDeadline.estimatedSeconds - elapsed;
+
+    let urgencyLevel = "CALM";
+    let pressureGuideline = "Plenty of time left. Focus on clean code, validation, and complete solutions.";
+    let timerColor = chalk.green;
+    
+    const pct = remaining / activeDeadline.estimatedSeconds;
+    if (remaining <= 0) {
+      urgencyLevel = "OVERTIME";
+      pressureGuideline = "🚨 DEADLINE EXPIRED: You are running in OVERTIME! You MUST wrap up immediately. If you need more time to finish cleanly, explain why and call the 'extend_deadline' tool now to prevent forced shutdown.";
+      timerColor = chalk.bgRed.white.bold;
+    } else if (pct < 0.1) {
+      urgencyLevel = "PANIC";
+      pressureGuideline = "⚠️ CRITICAL TIME PRESSURE: Time is almost up! Omit extra steps, focus purely on resolving the core task and finishing immediately.";
+      timerColor = chalk.red.bold;
+    } else if (pct < 0.3) {
+      urgencyLevel = "URGENT";
+      pressureGuideline = "Time is running low. Avoid round-trips, run tests quickly, and resolve the final steps.";
+      timerColor = chalk.red;
+    } else if (pct < 0.6) {
+      urgencyLevel = "MEDIUM";
+      pressureGuideline = "Time is ticking. Work efficiently and avoid repeating commands.";
+      timerColor = chalk.yellow;
+    }
+
+    if (remaining <= 0) {
+      graceStepsLeft--;
+      if (graceStepsLeft < 0) {
+        const errorMsg = `🚨 [LOOP PREVENTION] Task terminated: Deadline exceeded and grace step limit reached without extension.`;
+        console.log(chalk.red.bold(`\n${errorMsg}\n`));
+        await recordSession(task, errorMsg, [...toolsUsed]);
+        return errorMsg;
+      }
+    }
+
+    const barWidth = 20;
+    const filledWidth = Math.max(0, Math.min(barWidth, Math.round(pct * barWidth)));
+    const emptyWidth = barWidth - filledWidth;
+    const barStr = "█".repeat(filledWidth) + "░".repeat(emptyWidth);
+    
+    const remainingText = remaining <= 0 ? `OVERTIME (${Math.abs(remaining)}s overdue)` : `${remaining}s remaining`;
+    console.log(timerColor(`⏰ TIMER: ${remainingText} / ${activeDeadline.estimatedSeconds}s [${barStr}] URGENCY: ${urgencyLevel}`));
+    if (remaining <= 0) {
+      console.log(chalk.red(`   ⚠️ Grace steps left: ${graceStepsLeft + 1} steps`));
+    }
+
+    const timePressureContext = `\n\n## URGENT TIMING AND DEADLINE SYSTEM
+- Task Start Time: ${new Date(activeDeadline.startTime).toISOString()}
+- Current Time: ${new Date().toISOString()}
+- Total Allocated Duration: ${activeDeadline.estimatedSeconds}s
+- Elapsed Time: ${elapsed}s
+- Remaining Time: ${remainingText}
+- Urgency Level: ${urgencyLevel}
+- Critical Instruction: ${pressureGuideline}
+${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceStepsLeft + 1} steps if you do not complete the task or use 'extend_deadline'.` : ""}`;
+
+    if (!messages[0]._originalContent) {
+      messages[0]._originalContent = messages[0].content;
+    }
+    messages[0].content = messages[0]._originalContent + timePressureContext;
 
     let response;
     let header = false;

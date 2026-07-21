@@ -2,8 +2,8 @@
 // tools.js — Tool implementations (the agent's "hands")
 // ============================================================
 
-import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
-import { exec } from "node:child_process";
+import { readFile, writeFile, mkdir, readdir, stat, appendFile } from "node:fs/promises";
+import { exec, spawn } from "node:child_process";
 import { resolve, relative, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
@@ -21,6 +21,25 @@ const DANGEROUS_PATTERNS = [
   ":(){",
   "format ",
 ];
+
+let activeBgProcess = null;
+let activeBgPid = null;
+let activeBgLogPath = null;
+
+export let activeDeadline = {
+  estimatedSeconds: 180,
+  startTime: Date.now()
+};
+
+function isProcessAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
 
 // ---- Helpers ----
 
@@ -57,49 +76,147 @@ async function confirm(message) {
 
 // ---- Heuristic Syntax & Indentation Checker ----
 
+function fixUnclosedBrackets(content) {
+  const lines = content.split("\n");
+  const brackets = { "{": "}", "(": ")", "[": "]" };
+  const stack = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let inString = false;
+    let stringChar = "";
+    for (let col = 0; col < line.length; col++) {
+      const char = line[col];
+      if ((char === '"' || char === "'" || char === "`") && line[col - 1] !== "\\") {
+        if (!inString) {
+          inString = true;
+          stringChar = char;
+        } else if (stringChar === char) {
+          inString = false;
+        }
+      }
+      if (!inString) {
+        if (char === "{" || char === "(" || char === "[") {
+          stack.push(char);
+        } else if (char === "}" || char === ")" || char === "]") {
+          stack.pop();
+        }
+      }
+    }
+  }
+  if (stack.length > 0) {
+    let appendStr = "";
+    while (stack.length > 0) {
+      const open = stack.pop();
+      appendStr += brackets[open];
+    }
+    return content + (content.endsWith("\n") ? "" : "\n") + appendStr;
+  }
+  return content;
+}
+
+function fixJson(content) {
+  let fixed = content;
+  // 1. Remove trailing commas
+  fixed = fixed.replace(/,(\s*[\]}])/g, "$1");
+  // 2. Wrap unquoted keys in double quotes
+  fixed = fixed.replace(/(?<={|,)\s*([a-zA-Z0-9_$]+)\s*:/g, '"$1":');
+  // 3. Replace single quotes around keys/values with double quotes
+  try {
+    JSON.parse(fixed);
+    return fixed;
+  } catch (e) {
+    let fixed2 = fixed.replace(/'([^']*)'/g, '"$1"');
+    try {
+      JSON.parse(fixed2);
+      return fixed2;
+    } catch (e2) {
+      return fixed;
+    }
+  }
+}
+
+function fixMixedIndentation(content) {
+  const lines = content.split("\n");
+  let spaceLines = 0;
+  let tabLines = 0;
+  for (const line of lines) {
+    const leading = line.match(/^([ \t]+)/);
+    if (leading) {
+      if (leading[1].includes(" ")) spaceLines++;
+      if (leading[1].includes("\t")) tabLines++;
+    }
+  }
+  if (spaceLines > 0 && tabLines > 0) {
+    if (spaceLines >= tabLines) {
+      return lines.map(line => {
+        const leading = line.match(/^([ \t]+)/);
+        if (leading) {
+          const cleanLeading = leading[1].replace(/\t/g, "    ");
+          return cleanLeading + line.slice(leading[0].length);
+        }
+        return line;
+      }).join("\n");
+    } else {
+      return lines.map(line => {
+        const leading = line.match(/^([ \t]+)/);
+        if (leading) {
+          const cleanLeading = leading[1].replace(/    /g, "\t").replace(/  /g, "\t");
+          return cleanLeading + line.slice(leading[0].length);
+        }
+        return line;
+      }).join("\n");
+    }
+  }
+  return content;
+}
+
 function checkSyntaxAndIndentation(filePath, content) {
   const ext = filePath.split(".").pop().toLowerCase();
   const errors = [];
   const warnings = [];
   const lines = content.split("\n");
 
-  // 1. Indentation mix check (spaces vs tabs) & Indentation jump check
-  let hasSpaces = false;
-  let hasTabs = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const leading = line.match(/^([ \t]+)/);
-    if (leading) {
-      if (leading[1].includes(" ")) hasSpaces = true;
-      if (leading[1].includes("\t")) hasTabs = true;
+  const isIndentationSensitive = ["py", "yml", "yaml", "gd", "nim", "hs"].includes(ext);
 
-      // Indentation jump checks (spaces only for simplicity)
-      if (hasSpaces && !hasTabs) {
-        const spaceCount = leading[1].length;
-        if (i > 0) {
-          const prevLine = lines[i - 1];
-          const prevLeading = prevLine.match(/^([ ]+)/);
-          if (prevLeading) {
-            const prevCount = prevLeading[1].length;
-            const diff = spaceCount - prevCount;
-            // Alert on sudden jumps greater than 4 spaces without brace/colon opening
-            if (
-              diff > 4 &&
-              !prevLine.trim().endsWith("{") &&
-              !prevLine.trim().endsWith(":") &&
-              !prevLine.trim().endsWith("(") &&
-              !prevLine.trim().endsWith("[")
-            ) {
-              warnings.push(`Line ${i + 1}: Indentation jumped suddenly by ${diff} spaces without a block opening character ({, :, (, [).`);
+  if (isIndentationSensitive) {
+    // 1. Indentation mix check (spaces vs tabs) & Indentation jump check
+    let hasSpaces = false;
+    let hasTabs = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const leading = line.match(/^([ \t]+)/);
+      if (leading) {
+        if (leading[1].includes(" ")) hasSpaces = true;
+        if (leading[1].includes("\t")) hasTabs = true;
+
+        // Indentation jump checks (spaces only for simplicity)
+        if (hasSpaces && !hasTabs) {
+          const spaceCount = leading[1].length;
+          if (i > 0) {
+            const prevLine = lines[i - 1];
+            const prevLeading = prevLine.match(/^([ ]+)/);
+            if (prevLeading) {
+              const prevCount = prevLeading[1].length;
+              const diff = spaceCount - prevCount;
+              // Alert on sudden jumps greater than 4 spaces without brace/colon opening
+              if (
+                diff > 4 &&
+                !prevLine.trim().endsWith("{") &&
+                !prevLine.trim().endsWith(":") &&
+                !prevLine.trim().endsWith("(") &&
+                !prevLine.trim().endsWith("[")
+              ) {
+                warnings.push(`Line ${i + 1}: Indentation jumped suddenly by ${diff} spaces without a block opening character ({, :, (, [).`);
+              }
             }
           }
         }
       }
     }
-  }
 
-  if (hasSpaces && hasTabs) {
-    warnings.push("Mixed spaces and tabs detected in file indentation. Use either spaces or tabs consistently.");
+    if (hasSpaces && hasTabs) {
+      warnings.push("Mixed spaces and tabs detected in file indentation. Use either spaces or tabs consistently.");
+    }
   }
 
   // 2. Bracket matching checks (curly braces, parentheses, square brackets)
@@ -149,19 +266,84 @@ function checkSyntaxAndIndentation(filePath, content) {
   return { errors, warnings };
 }
 
-// Perform active checks (Node check for JS, JSON.parse for JSON)
+// Perform active checks (Node check for JS, JSON.parse for JSON) and auto-fix if needed
 async function performPostWriteValidation(fullPath, content) {
   const ext = fullPath.split(".").pop().toLowerCase();
-  const heuristics = checkSyntaxAndIndentation(fullPath, content);
   
+  // 1. Run initial checks
+  let heuristics = checkSyntaxAndIndentation(fullPath, content);
+  let isJsonValid = true;
   if (ext === "json") {
     try {
       JSON.parse(content);
     } catch (err) {
+      isJsonValid = false;
       heuristics.errors.push(`JSON Parsing Error: ${err.message}`);
     }
-  } else if (ext === "js" || ext === "mjs" || ext === "cjs") {
-    // Run built-in node syntax check (zero-dependency)
+  }
+
+  // 2. If errors/warnings detected, try to auto-fix
+  if (heuristics.errors.length > 0 || heuristics.warnings.length > 0) {
+    let fixedContent = content;
+    let didChange = false;
+
+    // Apply JSON fixes if needed
+    if (ext === "json" && !isJsonValid) {
+      const maybeFixed = fixJson(content);
+      if (maybeFixed !== content) {
+        fixedContent = maybeFixed;
+        didChange = true;
+      }
+    }
+
+    // Apply bracket fixes for JS/JSON etc if unclosed brackets exist
+    const hasUnclosedBracket = heuristics.errors.some(e => e.includes("Unclosed bracket"));
+    if (hasUnclosedBracket && ["js", "json", "ts", "jsx", "tsx", "css", "html"].includes(ext)) {
+      const maybeFixed = fixUnclosedBrackets(fixedContent);
+      if (maybeFixed !== fixedContent) {
+        fixedContent = maybeFixed;
+        didChange = true;
+      }
+    }
+
+    // Apply indentation fixes for mixed indentation
+    const hasMixedIndentation = heuristics.warnings.some(w => w.includes("Mixed spaces and tabs"));
+    if (hasMixedIndentation) {
+      const maybeFixed = fixMixedIndentation(fixedContent);
+      if (maybeFixed !== fixedContent) {
+        fixedContent = maybeFixed;
+        didChange = true;
+      }
+    }
+
+    // 3. If we updated the content, write it back and re-run checks
+    if (didChange) {
+      try {
+        await writeFile(fullPath, fixedContent, "utf-8");
+        // Recheck
+        heuristics = checkSyntaxAndIndentation(fullPath, fixedContent);
+        if (ext === "json") {
+          try {
+            JSON.parse(fixedContent);
+          } catch (err) {
+            heuristics.errors.push(`JSON Parsing Error (post-fix): ${err.message}`);
+          }
+        }
+        heuristics.autoFixed = true;
+      } catch (err) {
+        heuristics.errors.push(`Auto-fix write error: ${err.message}`);
+      }
+    }
+  }
+
+  // Node check for JS files
+  if (ext === "js" || ext === "mjs" || ext === "cjs") {
+    // Read the current file on disk (it might have been auto-fixed)
+    let currentContent = content;
+    try {
+      currentContent = await readFile(fullPath, "utf-8");
+    } catch (e) {}
+
     const errorMsg = await new Promise((res) => {
       exec(`node --check "${fullPath}"`, (err, stdout, stderr) => {
         if (err) res(stderr.trim() || err.message);
@@ -169,7 +351,33 @@ async function performPostWriteValidation(fullPath, content) {
       });
     });
     if (errorMsg) {
-      heuristics.errors.push(`Node.js Syntax Error:\n${errorMsg}`);
+      // If we haven't tried fixing unclosed brackets yet, let's try it
+      const hasUnclosedBracket = errorMsg.includes("missing }") || errorMsg.includes("unexpected end of input") || errorMsg.includes("missing )") || errorMsg.includes("missing ]");
+      if (hasUnclosedBracket && !heuristics.autoFixed) {
+        const maybeFixed = fixUnclosedBrackets(currentContent);
+        if (maybeFixed !== currentContent) {
+          try {
+            await writeFile(fullPath, maybeFixed, "utf-8");
+            const secondCheckError = await new Promise((res) => {
+              exec(`node --check "${fullPath}"`, (err, stdout, stderr) => {
+                if (err) res(stderr.trim() || err.message);
+                else res(null);
+              });
+            });
+            if (!secondCheckError) {
+              heuristics.autoFixed = true;
+              // Clear previous JS/Node syntax errors
+              heuristics.errors = heuristics.errors.filter(e => !e.includes("Node.js Syntax Error"));
+            } else {
+              heuristics.errors.push(`Node.js Syntax Error (post-fix):\n${secondCheckError}`);
+            }
+          } catch (e) {}
+        } else {
+          heuristics.errors.push(`Node.js Syntax Error:\n${errorMsg}`);
+        }
+      } else {
+        heuristics.errors.push(`Node.js Syntax Error:\n${errorMsg}`);
+      }
     }
   }
 
@@ -418,19 +626,146 @@ async function runCommandTool({ command, cwd }) {
     if (!allowed) return "❌ Command blocked by user.";
   }
 
-  return new Promise((res) => {
-    exec(
-      command,
-      { cwd: workdir, timeout: 30000, maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => {
-        let output = "";
-        if (stdout) output += stdout;
-        if (stderr) output += (output ? "\n" : "") + "STDERR:\n" + stderr;
-        if (error && !stderr) output += `ERROR: ${error.message}`;
-        res(truncate(output || "(no output)"));
-      }
-    );
+  // Check if a background command is already active
+  if (activeBgPid && isProcessAlive(activeBgPid)) {
+    return `⚠️ A background process is already running (PID ${activeBgPid}). Use 'peek_terminal' to check its progress, or run 'peek_terminal' with action='kill' to terminate it first.`;
+  }
+
+  activeBgLogPath = resolve(getWorkdir(), ".agent_terminal.log");
+
+  try {
+    await writeFile(activeBgLogPath, `--- Run Command: ${command} ---\n`, "utf-8");
+  } catch (err) {
+    return `❌ Failed to initialize log file: ${err.message}`;
+  }
+
+  const child = spawn(command, {
+    shell: true,
+    cwd: workdir,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"]
   });
+
+  activeBgProcess = child;
+  activeBgPid = child.pid;
+
+  child.stdout.on("data", (data) => {
+    appendFile(activeBgLogPath, data).catch(() => {});
+  });
+
+  child.stderr.on("data", (data) => {
+    appendFile(activeBgLogPath, data).catch(() => {});
+  });
+
+  let exitCode = null;
+  let hasExited = false;
+
+  child.on("exit", (code) => {
+    exitCode = code;
+    hasExited = true;
+    activeBgProcess = null;
+    activeBgPid = null;
+  });
+
+  child.on("error", (err) => {
+    appendFile(activeBgLogPath, `\nERROR SPAWNING PROCESS: ${err.message}\n`).catch(() => {});
+    hasExited = true;
+    activeBgProcess = null;
+    activeBgPid = null;
+  });
+
+  const timeoutMs = 30000;
+  
+  return new Promise((resolvePromise) => {
+    const checkInterval = setInterval(async () => {
+      if (hasExited) {
+        clearInterval(checkInterval);
+        clearTimeout(timer);
+        try {
+          const logContent = await readFile(activeBgLogPath, "utf-8");
+          let output = logContent;
+          if (exitCode !== null && exitCode !== 0) {
+            output += `\nCommand exited with code ${exitCode}`;
+          }
+          resolvePromise(truncate(output || "(no output)"));
+        } catch (e) {
+          resolvePromise(`Command completed but failed to read output: ${e.message}`);
+        }
+      }
+    }, 100);
+
+    const timer = setTimeout(async () => {
+      clearInterval(checkInterval);
+      try {
+        const logContent = await readFile(activeBgLogPath, "utf-8");
+        resolvePromise(`⚠️ [TIMEOUT] The command is taking longer than 30s. It has been detached and is running in the background.
+You can monitor the output using the 'peek_terminal' tool.
+Recent output:
+${truncate(logContent || "(no output)")}`);
+      } catch (e) {
+        resolvePromise(`⚠️ [TIMEOUT] The command is taking longer than 30s. It has been detached. Failed to read current logs: ${e.message}`);
+      }
+    }, timeoutMs);
+  });
+}
+
+async function peekTerminalTool({ action = "peek" } = {}) {
+  if (action === "kill") {
+    if (!activeBgPid) {
+      return "❌ No active background process to kill.";
+    }
+    try {
+      process.kill(-activeBgPid, "SIGTERM");
+    } catch (e) {
+      try {
+        process.kill(activeBgPid, "SIGTERM");
+      } catch (e2) {
+        return `❌ Failed to kill process: ${e2.message}`;
+      }
+    }
+    activeBgProcess = null;
+    activeBgPid = null;
+    return "✅ Sent SIGTERM to the active background process.";
+  }
+
+  const logPath = resolve(getWorkdir(), ".agent_terminal.log");
+  const logExists = existsSync(logPath);
+
+  if (!activeBgPid) {
+    if (logExists) {
+      try {
+        const logContent = await readFile(logPath, "utf-8");
+        return `[STATUS: INACTIVE] No background process is active.
+Last process output:
+${truncate(logContent || "(no output)")}`;
+      } catch (e) {
+        return `[STATUS: INACTIVE] No background process is active. Failed to read logs: ${e.message}`;
+      }
+    }
+    return `[STATUS: INACTIVE] No background process has been run yet.`;
+  }
+
+  const alive = isProcessAlive(activeBgPid);
+  let logContent = "";
+  if (logExists) {
+    try {
+      logContent = await readFile(logPath, "utf-8");
+    } catch (e) {
+      logContent = `Error reading terminal buffer: ${e.message}`;
+    }
+  }
+
+  if (alive) {
+    return `[STATUS: RUNNING] Process is still executing in the background (PID ${activeBgPid}).
+Recent output:
+${truncate(logContent || "(no output)")}`;
+  } else {
+    activeBgProcess = null;
+    activeBgPid = null;
+    return `[STATUS: COMPLETED] The process has finished running.
+Final output:
+${truncate(logContent || "(no output)")}`;
+  }
 }
 
 async function grepSearchTool({ pattern, path, include }) {
@@ -473,6 +808,14 @@ async function indexCodebaseTool() {
   }
 }
 
+async function extendDeadlineTool({ additional_seconds, reason }) {
+  if (typeof additional_seconds !== "number" || additional_seconds <= 0) {
+    return "❌ Error: 'additional_seconds' must be a positive number.";
+  }
+  activeDeadline.estimatedSeconds += additional_seconds;
+  return `✅ Deadline successfully extended by ${additional_seconds} seconds. New limit: ${activeDeadline.estimatedSeconds}s. Reason: ${reason}`;
+}
+
 // ---- Registry ----
 
 const TOOL_REGISTRY = {
@@ -483,6 +826,8 @@ const TOOL_REGISTRY = {
   run_command: runCommandTool,
   grep_search: grepSearchTool,
   index_codebase: indexCodebaseTool,
+  peek_terminal: peekTerminalTool,
+  extend_deadline: extendDeadlineTool,
 };
 
 /**

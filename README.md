@@ -451,8 +451,13 @@ Once a scenario is chosen, it goes through three safety gates:
 
 ---
 
-## What's New in v3.0, v2.1 & v2.0
+## What's New in v3.1, v3.0, v2.1 & v2.0
 
+* **Self-Healing Linter Auto-Fix (v3.1)** — Automatically repairs unclosed brackets, mixed indentation, and invalid JSON formatting on save operations.
+* **Conditional Indentation Validation (v3.1)** — Bypasses indentation alerts for non-indentation-sensitive files (JS, CSS, HTML, Markdown), restricting strict indentation rules to Python and YAML.
+* **Persistent Shell Layer & Detached Timeout (v3.1)** — Spawns shell processes asynchronously. Leaves processes running in the background when the 30-second wait limit is exceeded rather than sending SIGKILL.
+* **`peek_terminal` Tool (v3.1)** — Enables checking background process output logs and execution status dynamically, with support for command termination.
+* **Dynamic Task countdown & Urgency Pressure (v3.1)** — Estimates task duration at startup, prints terminal progress bar meters, and injects elapsed/remaining time prompts to guide the agent under time constraints.
 * **Subagent Orchestration System (v3.0)** — task decomposition, parallel execution in isolated Git worktrees, and automated conflict resolution.
 * **Sandbox Simulation Engine (v3.0)** — multi-scenario sandbox runs, LLM verdict selection, and a 3-step promotion pipeline (Rebase → Shadow Verify → Live Apply).
 * **Infinite Step / Cycle Budgets (v3.0)** — removed hard step caps. The agent can run indefinitely to solve complex objectives.
