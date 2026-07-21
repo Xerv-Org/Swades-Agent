@@ -1,21 +1,55 @@
 # Swades Agent v3.1: The Ultimate Operational Developer Manual & Tutorial
 
----
+Welcome to the ultimate operational manual and developer reference guide for **Swades Agent v3.1**. This handbook is designed to serve as an exhaustive operational resource for software engineers, system operators, and automated testing coordinators. 
 
-## Chapter 1: Introduction & Operational Philosophy
-
-Swades Agent is a terminal-native, autonomous software engineering agent designed to run directly within your codebase. Unlike web-based coding assistants that operate in isolated clouds or require copying and pasting code, Swades Agent executes commands directly in your local environment, making surgical file edits, running shell tasks, and managing background services.
-
-### 1.1 Developer Experience (DX) Philosophy
-Swades Agent is built to behave like a human engineer working inside a terminal:
-- **Think-Before-Write**: Before making code edits, the agent analyzes file imports, functions, and layout structures to avoid syntax corruption.
-- **Strict Verification Gates**: Modified files are validated at write-time. The linter automatically repairs unclosed brackets, formatting, or JSON syntax issues before the compiler executes.
-- **Asynchronous Execution**: Long-running tests, server builds, or package installs run in detached background terminals, keeping the main CLI loop responsive.
-- **Time and Cost Safety**: The agent estimates a time budget at startup. It monitors a visual countdown timer and can request deadline extensions to prevent infinite execution loops.
+It covers every configuration setup, environment variable, prompt recipe, countdown state, linter correction, persistent process monitor, GUI portal check, worktree manager, and sandbox simulation pipeline in granular detail.
 
 ---
 
-## Chapter 2: System Installation & Configuration
+## Chapter 1: Operational Philosophy & System Design
+
+Swades Agent is a terminal-native, autonomous software engineering agent built to run directly on your workspace. Instead of isolating your execution inside closed, virtualized cloud environments or requiring tedious copy-pasting of files, Swades Agent integrates directly with your local system utilities. It edits source files surgically, triggers tests, queries databases, builds applications, and monitors running servers without leaving your terminal.
+
+```
++------------------------------------------------------------+
+|                    USER/DEVELOPER INPUT                    |
+|             (CLI Prompt / Interactive Dashboard)           |
++------------------------------------------------------------+
+                              │
+                              ▼
++------------------------------------------------------------+
+|                 AI COMPLEXITY CLASSIFIER                   |
+|       (Determines Normal vs. Autonomous vs. CUA Mode)      |
++------------------------------------------------------------+
+                              │
+            ┌─────────────────┼─────────────────┐
+            ▼                 ▼                 ▼
+     [Normal Mode]    [Autonomous Mode]     [CUA Mode]
+     (Single ReAct)   (Multi-Cycle Loop)   (GUI Session)
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              ▼
++------------------------------------------------------------+
+|                  CORE ReAct AGENT ENGINE                   |
+|               (Think -> Act -> Observe Loop)               |
++------------------------------------------------------------+
+      │                       │                        │
+      ▼                       ▼                        ▼
+[Time Manager]        [Syntax Linter]          [Shell Spawner]
+- Clamped budget      - Stack Brackets         - Detached Spawn
+- Urgency prompts     - JSON Normalizer        - Log Buffering
+- Grace limits        - Space/Tab Format       - Peek & Terminate
+```
+
+### 1.1 Developer Experience (DX) Priorities
+- **Surgical Code Modifiers**: Rather than rewriting whole files (which consumes excessive tokens and corrupts structural layouts), the agent operates through surgical patches, preserving your existing comment blocks, documentation, and layout formats.
+- **Write-Time Syntax Protection**: Modified files undergo syntax checks prior to save operations. The linter automatically repairs unclosed brackets, formatting, or JSON syntax issues before the compiler executes.
+- **Asynchronous Execution Multiplexing**: Commands that run indefinitely (like dev servers, test suites, or compilation processes) run in detached background terminals, keeping the main CLI loop responsive.
+- **Urgency Deadline Guardrails**: The agent estimates a time budget at startup. It monitors a visual countdown timer and can request deadline extensions to prevent infinite execution loops.
+
+---
+
+## Chapter 2: Installing and Configuring the Agent Environment
 
 Follow this checklist to configure Swades Agent inside your workspace.
 
@@ -66,22 +100,23 @@ Open `.env` in a text editor to configure the parameters below.
 ### 2.4 LLM Provider Setup Profiles
 
 #### Profile A: OpenRouter Setup (Cloud Model API)
+Recommended for accessing Claude 3.5 Sonnet or Llama-3.3:
 ```env
-API_KEY=sk-or-v1-your-openrouter-key-here
+API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 BASE_URL=https://openrouter.ai/api/v1
 MODEL=meta-llama/llama-3.3-70b-instruct
 ```
 
 #### Profile B: OpenAI Setup
 ```env
-API_KEY=sk-proj-your-openai-key-here
+API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 BASE_URL=https://api.openai.com/v1
 MODEL=gpt-4o
 ```
 
 #### Profile C: Groq Setup
 ```env
-API_KEY=gsk_your-groq-key-here
+API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 BASE_URL=https://api.groq.com/openai/v1
 MODEL=llama-3.3-70b-versatile
 ```
