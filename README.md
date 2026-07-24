@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logos/swades-clean-removebg-preview.png" width="120" alt="Swades Agent logo — autonomous AI coding agent"/>
+  <img src="https://raw.githubusercontent.com/Xerv-Org/Swades-Agent/1c5a8f350fe2990e07dda576eb12ef76a52a6017/logos/swades-clean-removebg-preview.png" width="120" alt="Swades Agent logo — autonomous AI software engineering agent"/>
 </p>
 
 <h1 align="center">Swades Agent</h1>

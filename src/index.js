@@ -1,13 +1,18 @@
+#!/usr/bin/env node
 // index.js — Entry point & CLI
 
 import "dotenv/config";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
+import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { runAgent } from "./agent.js";
 import { runDirector } from "./director.js";
 import { runCUA } from "./cua.js";
 import { executeTool } from "./tools.js";
 import { callLLM } from "./llm.js";
+
+export { runAgent, runDirector, runCUA, executeTool };
 
 async function detectModeWithAI(task) {
   if (!process.env.API_KEY) {
@@ -161,4 +166,13 @@ async function main() {
   }
 }
 
-main();
+// Check if run directly (CLI mode)
+const isMain = process.argv[1] && (
+  fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
+  resolve(process.argv[1]).endsWith("bin/swades-agent") ||
+  resolve(process.argv[1]).endsWith("bin\\swades-agent")
+);
+
+if (isMain) {
+  main();
+}

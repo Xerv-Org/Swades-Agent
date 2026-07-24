@@ -1,14 +1,69 @@
 {
   "name": "swades-agent",
-  "version": "2.0.0",
+  "displayName": "Swades Agent",
+  "version": "1.0.3",
+  "license": "MIT",
+  "publisher": "xerv",
+  "icon": "logos/swades-clean-removebg-preview.png",
   "description": "Swades Agent — autonomous AI software engineering agent using the ReAct loop",
   "type": "module",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Electroiscoding/Swades-Agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Electroiscoding/Swades-Agent/issues"
+  },
+  "homepage": "https://github.com/Electroiscoding/Swades-Agent#readme",
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./dist/extension.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "swades-agent": "./src/index.js"
+  },
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "build:extension": "node esbuild.config.js",
+    "package:vsce": "node src/prepare-package.js extension && vsce package",
+    "publish:ovsx": "node src/prepare-package.js extension && ovsx publish",
+    "publish:npm": "node src/prepare-package.js npm && npm publish --access public"
   },
   "dependencies": {
-    "openai": "^4.86.2",
+    "chalk": "^5.4.1",
     "dotenv": "^16.4.7",
-    "chalk": "^5.4.1"
+    "openai": "^4.86.2"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
+    "ovsx": "^1.0.2"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "swades-agent.run",
+        "title": "Swades Agent: Run Task...",
+        "category": "Swades Agent"
+      },
+      {
+        "command": "swades-agent.runAutonomous",
+        "title": "Swades Agent: Run Task (Autonomous)...",
+        "category": "Swades Agent"
+      },
+      {
+        "command": "swades-agent.runCua",
+        "title": "Swades Agent: Run Task (Computer Use / CUA)...",
+        "category": "Swades Agent"
+      }
+    ]
   }
 }

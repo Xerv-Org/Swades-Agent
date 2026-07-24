@@ -11,3 +11,15 @@ __pycache__/
 .swades_worktrees/
 .swades_sandboxes/
 .swades_simulation_report.json
+
+# VS Code Extension Builds
+dist/
+*.vsix
+
+# Gradle & IntelliJ Plugin Builds
+.gradle/
+.intellijPlatform/
+build/
+out/
+.idea/
+*.iml

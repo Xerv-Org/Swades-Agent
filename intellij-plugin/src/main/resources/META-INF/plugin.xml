@@ -1,0 +1,23 @@
+<idea-plugin>
+    <id>com.xerv.swades</id>
+    <name>Swades Agent</name>
+    <vendor email="support@xerv.org" url="https://xerv.org">Xerv</vendor>
+
+    <description><![CDATA[
+    Autonomous AI software engineering agent for your terminal in IntelliJ.
+    Allows running the Swades Agent ReAct loop directly inside the built-in terminal.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
+
+    <actions>
+        <action id="com.xerv.swades.RunAction"
+                class="com.xerv.swades.SwadesAction"
+                text="Swades Agent: Run Task..."
+                description="Run Swades Agent task in IntelliJ terminal">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="shift alt S"/>
+        </action>
+    </actions>
+</idea-plugin>

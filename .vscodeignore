@@ -1,0 +1,14 @@
+.env
+.git/**
+.agent_index.json
+.agent_memory.json
+.agent_terminal.log
+.mouse_position.json
+.swades_worktrees/**
+.swades_sandboxes/**
+demo.mp4
+screenshot_raw.png
+arch.png
+esbuild.config.js
+**/*.vsix
+*.log
