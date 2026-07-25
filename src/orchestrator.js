@@ -181,8 +181,18 @@ Your job: Manually apply the intended changes from this diff to the current code
 export async function runOrchestrated(task, baseDir) {
   const evaluation = await evaluateComplexity(task);
 
-  if (evaluation.level === "LOW") {
+  // --sim flag: force full pipeline even if classifier says LOW
+  const forceOrchestrated = process.env.FORCE_ORCHESTRATED === "true";
+
+  if (evaluation.level === "LOW" && !forceOrchestrated) {
     return null; // Signal to caller: run normal single-agent
+  }
+
+  // If forced on a LOW task, synthesize a minimal single-subtask decomposition
+  if (evaluation.level === "LOW" && forceOrchestrated) {
+    console.log(chalk.yellow("   ⚡ Complexity: LOW but --sim flag forces orchestrated pipeline"));
+    evaluation.level = "HIGH";
+    evaluation.subtasks = [{ label: "main", description: task }];
   }
 
   console.log(chalk.green.bold("\n🔷 Orchestrated Execution Activated"));

@@ -54,12 +54,51 @@ Response MUST be a single word, one of: "cua", "autonomous", "normal". Do not wr
   }
 }
 
+function printHelp() {
+  console.log(chalk.cyan.bold("\n  🚀 Swades Agent v2.0.0\n"));
+  console.log(chalk.white("  Usage: swades-agent [task] [flags]\n"));
+  console.log(chalk.dim("  If no task is given, drops into interactive mode.\n"));
+  console.log(chalk.white.bold("  Execution Strategy Flags:\n"));
+  console.log(chalk.green("  (default)          ") + "AI auto-detects the best strategy for your task");
+  console.log(chalk.green("  --autonomous, -a   ") + "Force Director-supervised loop (multi-cycle autonomous)");
+  console.log(chalk.green("  --normal, -n       ") + "Force single-run agent (no Director loop)");
+  console.log(chalk.green("  --cua, -c          ") + "Force Computer Use Agent (desktop/GUI automation)");
+  console.log();
+  console.log(chalk.white.bold("  Subagent & Simulation Flags:\n"));
+  console.log(chalk.yellow("  (default)          ") + "Subagents + simulation auto-triggered on HIGH complexity tasks");
+  console.log(chalk.yellow("  --subagents, -s    ") + "Force subagent decomposition, SKIP post-merge simulation (faster)");
+  console.log(chalk.yellow("  --no-sim           ") + "Same as --subagents: subagents enabled, simulation disabled");
+  console.log(chalk.yellow("  --sim              ") + "Force subagent decomposition WITH simulation (even on low-complexity)");
+  console.log();
+  console.log(chalk.white.bold("  Other Flags:\n"));
+  console.log(chalk.blue("  --image, -i <path> ") + "Attach a local image or URL to the task");
+  console.log(chalk.blue("  --help, -h         ") + "Show this help message");
+  console.log();
+  console.log(chalk.dim("  Examples:"));
+  console.log(chalk.dim('    swades-agent "Add login tests"'));
+  console.log(chalk.dim('    swades-agent "Refactor to TypeScript" --autonomous'));
+  console.log(chalk.dim('    swades-agent "Build REST API" --subagents        # fast, no simulation'));
+  console.log(chalk.dim('    swades-agent "Build REST API" --sim               # subagents + full simulation'));
+  console.log(chalk.dim('    swades-agent "Implement UI" --image mockup.png'));
+  console.log();
+}
+
 async function getTaskAndMode() {
   const args = process.argv.slice(2);
+
+  // --help / -h
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
+
   const hasAutonomousFlag = args.includes("--autonomous") || args.includes("-a");
-  const hasCuaFlag = args.includes("--cua") || args.includes("-c");
-  const hasNormalFlag = args.includes("--normal") || args.includes("-n");
-  const hasSubagentsFlag = args.includes("--subagents") || args.includes("-s");
+  const hasCuaFlag        = args.includes("--cua")        || args.includes("-c");
+  const hasNormalFlag     = args.includes("--normal")     || args.includes("-n");
+  // --subagents / -s / --no-sim → subagents WITHOUT simulation (faster)
+  const hasNoSimFlag      = args.includes("--subagents")  || args.includes("-s") || args.includes("--no-sim");
+  // --sim → force subagents WITH simulation (even on auto-detected low-complexity)
+  const hasSimFlag        = args.includes("--sim");
 
   let image = null;
   const imgIdx = args.findIndex(a => a === "--image" || a === "-i");
@@ -68,16 +107,13 @@ async function getTaskAndMode() {
   }
 
   // Filter out flags and their parameters to build clean task string
+  const FLAG_TOKENS = new Set([
+    "--autonomous", "-a", "--cua", "-c", "--normal", "-n",
+    "--subagents", "-s", "--no-sim", "--sim", "--help", "-h",
+  ]);
   const taskArgs = [];
   for (let i = 0; i < args.length; i++) {
-    if (
-      args[i] === "--autonomous" || args[i] === "-a" ||
-      args[i] === "--cua" || args[i] === "-c" ||
-      args[i] === "--normal" || args[i] === "-n" ||
-      args[i] === "--subagents" || args[i] === "-s"
-    ) {
-      continue;
-    }
+    if (FLAG_TOKENS.has(args[i])) continue;
     if (args[i] === "--image" || args[i] === "-i") {
       i++; // Skip the next arg (its value)
       continue;
@@ -94,8 +130,16 @@ async function getTaskAndMode() {
     if (hasCuaFlag) {
       return { task, image, isAutonomous: false, isCUA: true };
     }
-    if (hasSubagentsFlag) {
+    if (hasNoSimFlag) {
+      // Subagents enabled, simulation SKIPPED
       process.env.SUBAGENTS_ONLY = "true";
+      console.log(chalk.yellow("   ⚡ Mode: Subagents (simulation skipped)"));
+      return { task, image, isAutonomous: false, isCUA: false };
+    }
+    if (hasSimFlag) {
+      // Force full pipeline: subagents + simulation
+      process.env.FORCE_ORCHESTRATED = "true";
+      console.log(chalk.yellow("   🧪 Mode: Subagents + Simulation (forced)"));
       return { task, image, isAutonomous: false, isCUA: false };
     }
     if (hasNormalFlag) {
