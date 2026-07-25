@@ -1,5 +1,5 @@
 {
-  "name": "swades-agent",
+  "name": "@xerv/swades-agent",
   "displayName": "Swades Agent",
   "version": "2.0.0",
   "license": "MIT",
@@ -22,6 +22,14 @@
     "AI",
     "Programming Languages",
     "Linters"
+  ],
+  "files": [
+    "src/",
+    "dist/",
+    "README.md",
+    "walkthrough.md",
+    "LICENSE",
+    ".env.example"
   ],
   "main": "./dist/extension.js",
   "exports": {

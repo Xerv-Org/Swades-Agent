@@ -12,3 +12,16 @@ arch.png
 esbuild.config.js
 **/*.vsix
 *.log
+
+# Large directories not needed in extension
+intellij-plugin/**
+bin_local/**
+node_modules/**
+
+# Dev/build artifacts
+__pycache__/**
+src/__pycache__/**
+src/prepare-package.js
+src/take_portal_screenshot.py
+src/cua_helper.py
+src/simulator.js
