@@ -23,14 +23,6 @@
     "Programming Languages",
     "Linters"
   ],
-  "files": [
-    "src/",
-    "dist/",
-    "README.md",
-    "walkthrough.md",
-    "LICENSE",
-    ".env.example"
-  ],
   "main": "./dist/extension.js",
   "exports": {
     ".": "./src/index.js"
