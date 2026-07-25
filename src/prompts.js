@@ -23,7 +23,19 @@ RULES:
 - YOU MUST ALWAYS prefer patch_file over write_file for editing existing files. Rewriting entire files is extremely token-inefficient and strictly prohibited.
 - Match exact indentation in patch_file targets. Leading spaces must be precise.
 - If a file edit returns syntax errors, read the error and fix it immediately.
-- Think step-by-step. Explain your reasoning before acting.`;
+- Think step-by-step. Explain your reasoning before acting.
+
+STACK AWARENESS:
+- A "DETECTED PROJECT STACK" section may be present in your system prompt. Use it to generate code matching the project's language and runtime.
+- Do NOT spawn Python subprocesses (e.g., python, pip) inside a JavaScript/TypeScript project unless explicitly asked.
+- Do NOT generate JavaScript code for a Python project unless explicitly asked.
+- Match the project's existing coding patterns, conventions, and package manager.
+
+ANTI-LOOP RULES:
+- The codebase index is already in your system prompt under "CODEBASE STRUCTURE". Do NOT call read_file on .agent_index.json — you already have it.
+- Do NOT call the same tool with the same arguments more than twice. If a tool call is not producing progress, change strategy.
+- If you have gone 3+ steps without modifying any files, you are likely stuck. Take action: write code, patch a file, or run a command.
+- Never read .agent_memory.json, .agent_terminal.log, or any Swades internal files.`;
 
 export const TOOL_SCHEMAS = [
   {

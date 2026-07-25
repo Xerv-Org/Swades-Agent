@@ -1,30 +1,46 @@
 // ============================================================
-// memory.js — Persistent memory across sessions (JSON file)
+// memory.js — Persistent memory across sessions (isolated in cache dir)
 // ============================================================
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
+import chalk from "chalk";
+import { getSwadesCacheDir } from "./cleanup.js";
 
-const MEMORY_FILE = resolve(process.cwd(), ".agent_memory.json");
+/**
+ * Get the memory file path, isolated in ~/.cache/swades/<project-hash>/
+ * instead of polluting the project root.
+ */
+function getMemoryFilePath() {
+  const workdir = process.env.WORKDIR || process.cwd();
+  const cacheDir = getSwadesCacheDir(workdir);
+  return resolve(cacheDir, "agent_memory.json");
+}
 
 /**
  * Load memory from disk. Returns { sessions: [], summary: "" }
  */
 export async function loadMemory() {
   try {
-    const raw = await readFile(MEMORY_FILE, "utf-8");
+    const memoryFile = getMemoryFilePath();
+    const raw = await readFile(memoryFile, "utf-8");
     return JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    // Only log if it's not a simple "file doesn't exist" case
+    if (err.code !== "ENOENT") {
+      console.log(chalk.dim(`   ⚠ Memory load warning: ${err.message}`));
+    }
     return { sessions: [], summary: "" };
   }
 }
 
 /**
- * Save memory to disk.
+ * Save memory to disk (in cache directory).
  */
 export async function saveMemory(memory) {
-  await mkdir(dirname(MEMORY_FILE), { recursive: true });
-  await writeFile(MEMORY_FILE, JSON.stringify(memory, null, 2), "utf-8");
+  const memoryFile = getMemoryFilePath();
+  await mkdir(dirname(memoryFile), { recursive: true });
+  await writeFile(memoryFile, JSON.stringify(memory, null, 2), "utf-8");
 }
 
 /**

@@ -12,6 +12,10 @@ __pycache__/
 .swades_sandboxes/
 .swades_simulation_report.json
 
+# NOTE: As of v2.0, Swades Agent stores .agent_index.json, .agent_memory.json,
+# and .agent_terminal.log in ~/.cache/swades/ instead of the project root.
+# The entries above are kept for backward compatibility during migration.
+
 # VS Code Extension Builds
 dist/
 *.vsix

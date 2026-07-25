@@ -7,6 +7,8 @@ import { exec, spawn } from "node:child_process";
 import { resolve, relative, dirname } from "node:path";
 import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
+import chalk from "chalk";
+import { getSwadesCacheDir, ensureCacheDir } from "./cleanup.js";
 
 // Dangerous command patterns that require user confirmation
 const DANGEROUS_PATTERNS = [
@@ -269,7 +271,7 @@ function checkSyntaxAndIndentation(filePath, content) {
   return { errors, warnings };
 }
 
-// Perform active checks (Node check for JS, JSON.parse for JSON) and auto-fix if needed
+// Perform active checks (Node check for JS, JSON.parse for JSON, py_compile for Python) and auto-fix if needed
 async function performPostWriteValidation(fullPath, content) {
   const ext = fullPath.split(".").pop().toLowerCase();
   
@@ -345,7 +347,9 @@ async function performPostWriteValidation(fullPath, content) {
     let currentContent = content;
     try {
       currentContent = await readFile(fullPath, "utf-8");
-    } catch (e) {}
+    } catch (readErr) {
+      console.log(chalk.dim(`   ⚠ Post-validation re-read failed: ${readErr.message}`));
+    }
 
     const errorMsg = await new Promise((res) => {
       exec(`node --check "${fullPath}"`, (err, stdout, stderr) => {
@@ -374,7 +378,9 @@ async function performPostWriteValidation(fullPath, content) {
             } else {
               heuristics.errors.push(`Node.js Syntax Error (post-fix):\n${secondCheckError}`);
             }
-          } catch (e) {}
+          } catch (writeErr) {
+            heuristics.errors.push(`Auto-fix write error: ${writeErr.message}`);
+          }
         } else {
           heuristics.errors.push(`Node.js Syntax Error:\n${errorMsg}`);
         }
@@ -384,10 +390,23 @@ async function performPostWriteValidation(fullPath, content) {
     }
   }
 
+  // Python syntax check for .py files
+  if (ext === "py") {
+    const pyError = await new Promise((res) => {
+      exec(`python3 -m py_compile "${fullPath}" 2>&1 || python -m py_compile "${fullPath}" 2>&1`, (err, stdout, stderr) => {
+        if (err) res((stderr || stdout || err.message).trim());
+        else res(null);
+      });
+    });
+    if (pyError && !pyError.includes("No module named") && !pyError.includes("not found")) {
+      heuristics.errors.push(`Python Syntax Error:\n${pyError}`);
+    }
+  }
+
   return heuristics;
 }
 
-// ---- Codebase Indexing Engine ----
+// ---- Codebase Indexing Engine (now writes to cache dir) ----
 
 function parseFileStructure(filename, content) {
   const ext = filename.split(".").pop().toLowerCase();
@@ -403,7 +422,7 @@ function parseFileStructure(filename, content) {
   if (["js", "mjs", "cjs", "ts", "tsx", "jsx"].includes(ext)) {
     for (const line of lines) {
       // Parse imports
-      const importMatches = [...line.matchAll(/import\s+.*\s+from\s+['"](.*)['"]/g)];
+      const importMatches = [...line.matchAll(/import\s+.*\s+from\s+['"](.*)[''"]/g)];
       for (const m of importMatches) structure.imports.push(m[1]);
 
       // Parse classes
@@ -443,19 +462,31 @@ function parseFileStructure(filename, content) {
 
 async function generateCodebaseIndex() {
   const workdir = getWorkdir();
+  const cacheDir = await ensureCacheDir(workdir);
+
   const index = {
     generatedAt: new Date().toISOString(),
+    workdir,
     files: {},
   };
 
   async function scan(dir) {
-    const items = await readdir(dir, { withFileTypes: true });
+    let items;
+    try {
+      items = await readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      console.log(chalk.dim(`   ⚠ Cannot read directory ${dir}: ${err.message}`));
+      return;
+    }
+
     for (const item of items) {
       if (
         item.name === "node_modules" ||
         item.name === ".git" ||
         item.name === ".agent_index.json" ||
-        item.name === ".agent_memory.json"
+        item.name === ".agent_memory.json" ||
+        item.name === ".swades_worktrees" ||
+        item.name === ".swades_sandboxes"
       ) {
         continue;
       }
@@ -471,20 +502,138 @@ async function generateCodebaseIndex() {
         const textExtensions = ["js", "jsx", "ts", "tsx", "py", "json", "html", "css", "md", "sh", "yml", "yaml", "env"];
         
         if (info.size < 1024 * 1024 && textExtensions.includes(ext)) {
-          const content = await readFile(fullPath, "utf-8");
-          const structure = parseFileStructure(item.name, content);
-          index.files[relPath] = {
-            size: info.size,
-            structure,
-          };
+          try {
+            const content = await readFile(fullPath, "utf-8");
+            const structure = parseFileStructure(item.name, content);
+            index.files[relPath] = {
+              size: info.size,
+              structure,
+            };
+          } catch (readErr) {
+            console.log(chalk.dim(`   ⚠ Cannot read file ${relPath}: ${readErr.message}`));
+          }
         }
       }
     }
   }
 
   await scan(workdir);
-  await writeFile(resolve(workdir, ".agent_index.json"), JSON.stringify(index, null, 2), "utf-8");
+
+  // Write index to cache directory instead of project root
+  const indexPath = resolve(cacheDir, "agent_index.json");
+  await writeFile(indexPath, JSON.stringify(index, null, 2), "utf-8");
   return index;
+}
+
+// ---- Stack Detection Engine ----
+
+/**
+ * Detect the project's technology stack by scanning for indicator files.
+ * Returns a structured object describing the detected runtime, framework, and language.
+ *
+ * @param {string} workdir - Absolute path to the workspace root
+ * @returns {{ language: string, runtime: string, framework: string, packageManager: string, details: string[] }}
+ */
+export async function detectProjectStack(workdir) {
+  const stack = {
+    language: "unknown",
+    runtime: "unknown",
+    framework: "none",
+    packageManager: "none",
+    details: [],
+  };
+
+  const dir = workdir || getWorkdir();
+
+  // ---- JavaScript / TypeScript ----
+  const pkgJsonPath = resolve(dir, "package.json");
+  if (existsSync(pkgJsonPath)) {
+    stack.language = "javascript";
+    stack.runtime = "node";
+    stack.packageManager = existsSync(resolve(dir, "yarn.lock")) ? "yarn" :
+                           existsSync(resolve(dir, "pnpm-lock.yaml")) ? "pnpm" : "npm";
+    stack.details.push("package.json detected");
+
+    try {
+      const pkg = JSON.parse(await readFile(pkgJsonPath, "utf-8"));
+      const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+
+      // Detect frameworks
+      if (allDeps["next"]) { stack.framework = "next.js"; stack.details.push("Next.js framework"); }
+      else if (allDeps["react"]) { stack.framework = "react"; stack.details.push("React library"); }
+      else if (allDeps["vue"]) { stack.framework = "vue"; stack.details.push("Vue.js framework"); }
+      else if (allDeps["svelte"]) { stack.framework = "svelte"; stack.details.push("Svelte framework"); }
+      else if (allDeps["express"]) { stack.framework = "express"; stack.details.push("Express.js server"); }
+      else if (allDeps["fastify"]) { stack.framework = "fastify"; stack.details.push("Fastify server"); }
+      else if (allDeps["hono"]) { stack.framework = "hono"; stack.details.push("Hono framework"); }
+
+      // Detect TypeScript
+      if (allDeps["typescript"] || existsSync(resolve(dir, "tsconfig.json"))) {
+        stack.language = "typescript";
+        stack.details.push("TypeScript detected");
+      }
+
+      // Detect if it's a VS Code extension
+      if (pkg.engines?.vscode) {
+        stack.details.push("VS Code extension");
+      }
+
+      // Detect if it's a CLI tool
+      if (pkg.bin) {
+        stack.details.push("CLI tool (has bin entry)");
+      }
+
+      // Detect Cloudflare Workers / Edge
+      if (allDeps["wrangler"] || allDeps["@cloudflare/workers-types"]) {
+        stack.runtime = "cloudflare-workers";
+        stack.details.push("Cloudflare Workers runtime");
+      }
+    } catch (readErr) {
+      stack.details.push(`package.json parse error: ${readErr.message}`);
+    }
+  }
+
+  // ---- Python ----
+  if (existsSync(resolve(dir, "requirements.txt")) || existsSync(resolve(dir, "pyproject.toml")) || existsSync(resolve(dir, "setup.py"))) {
+    stack.language = stack.language === "unknown" ? "python" : stack.language;
+    stack.runtime = stack.runtime === "unknown" ? "python" : stack.runtime;
+    stack.details.push("Python project detected");
+
+    if (existsSync(resolve(dir, "pyproject.toml"))) {
+      stack.packageManager = "poetry/pip";
+      stack.details.push("pyproject.toml found");
+    }
+    if (existsSync(resolve(dir, "Pipfile"))) {
+      stack.packageManager = "pipenv";
+      stack.details.push("Pipfile found");
+    }
+  }
+
+  // ---- Rust ----
+  if (existsSync(resolve(dir, "Cargo.toml"))) {
+    stack.language = "rust";
+    stack.runtime = "native";
+    stack.packageManager = "cargo";
+    stack.details.push("Rust project (Cargo.toml)");
+  }
+
+  // ---- Go ----
+  if (existsSync(resolve(dir, "go.mod"))) {
+    stack.language = "go";
+    stack.runtime = "native";
+    stack.packageManager = "go modules";
+    stack.details.push("Go project (go.mod)");
+  }
+
+  // ---- Java / Kotlin / Gradle ----
+  if (existsSync(resolve(dir, "build.gradle")) || existsSync(resolve(dir, "build.gradle.kts")) || existsSync(resolve(dir, "pom.xml"))) {
+    stack.language = stack.language === "unknown" ? "java" : stack.language;
+    stack.runtime = "jvm";
+    stack.packageManager = existsSync(resolve(dir, "pom.xml")) ? "maven" : "gradle";
+    stack.details.push("JVM project detected");
+  }
+
+  return stack;
 }
 
 // ---- Tool Implementations ----
@@ -635,7 +784,9 @@ async function runCommandTool({ command, cwd }) {
     return `⚠️ A background process is already running (PID ${activeBgPid}). Use 'peek_terminal' to check its progress, or run 'peek_terminal' with action='kill' to terminate it first.`;
   }
 
-  activeBgLogPath = resolve(getWorkdir(), ".agent_terminal.log");
+  // Write terminal log to cache dir instead of project root
+  const cacheDir = await ensureCacheDir(getWorkdir());
+  activeBgLogPath = resolve(cacheDir, "agent_terminal.log");
 
   try {
     await writeFile(activeBgLogPath, `--- Run Command: ${command} ---\n`, "utf-8");
@@ -654,11 +805,15 @@ async function runCommandTool({ command, cwd }) {
   activeBgPid = child.pid;
 
   child.stdout.on("data", (data) => {
-    appendFile(activeBgLogPath, data).catch(() => {});
+    appendFile(activeBgLogPath, data).catch((appendErr) => {
+      console.log(chalk.dim(`   ⚠ Log append error: ${appendErr.message}`));
+    });
   });
 
   child.stderr.on("data", (data) => {
-    appendFile(activeBgLogPath, data).catch(() => {});
+    appendFile(activeBgLogPath, data).catch((appendErr) => {
+      console.log(chalk.dim(`   ⚠ Log append error: ${appendErr.message}`));
+    });
   });
 
   let exitCode = null;
@@ -672,7 +827,9 @@ async function runCommandTool({ command, cwd }) {
   });
 
   child.on("error", (err) => {
-    appendFile(activeBgLogPath, `\nERROR SPAWNING PROCESS: ${err.message}\n`).catch(() => {});
+    appendFile(activeBgLogPath, `\nERROR SPAWNING PROCESS: ${err.message}\n`).catch((appendErr) => {
+      console.log(chalk.dim(`   ⚠ Error log append failed: ${appendErr.message}`));
+    });
     hasExited = true;
     activeBgProcess = null;
     activeBgPid = null;
@@ -732,7 +889,9 @@ async function peekTerminalTool({ action = "peek" } = {}) {
     return "✅ Sent SIGTERM to the active background process.";
   }
 
-  const logPath = resolve(getWorkdir(), ".agent_terminal.log");
+  // Check cache dir for log file
+  const cacheDir = getSwadesCacheDir(getWorkdir());
+  const logPath = resolve(cacheDir, "agent_terminal.log");
   const logExists = existsSync(logPath);
 
   if (!activeBgPid) {
@@ -806,7 +965,8 @@ async function indexCodebaseTool() {
   try {
     const index = await generateCodebaseIndex();
     const fileCount = Object.keys(index.files).length;
-    return `✅ Codebase indexed successfully. Found and indexed ${fileCount} source files. Saving to .agent_index.json.`;
+    const cacheDir = getSwadesCacheDir(getWorkdir());
+    return `✅ Codebase indexed successfully. Found and indexed ${fileCount} source files. Index saved to cache: ${cacheDir}/agent_index.json`;
   } catch (err) {
     return `❌ Error generating codebase index: ${err.message}`;
   }

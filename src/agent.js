@@ -1,15 +1,94 @@
 // agent.js — ReAct loop orchestrator (THINK → ACT → OBSERVE)
+// Now with: Loop Detection, Stack Detection, Cache-Isolated Index
 
 import chalk from "chalk";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import { callLLM, MODEL } from "./llm.js";
-import { executeTool, activeDeadline } from "./tools.js";
+import { executeTool, activeDeadline, detectProjectStack } from "./tools.js";
 import { SYSTEM_PROMPT, TOOL_SCHEMAS } from "./prompts.js";
 import { getMemoryContext, recordSession } from "./memory.js";
 import { runOrchestrated } from "./orchestrator.js";
 import { runSimulated } from "./simulator.js";
+import { getSwadesCacheDir } from "./cleanup.js";
+
+// ============================================================
+// LoopDetector — Prevents infinite loops and repetitive behavior
+// ============================================================
+
+class LoopDetector {
+  constructor() {
+    this.history = [];          // [{name, argsHash, step}]
+    this.stagnantSteps = 0;     // consecutive steps without file changes
+    this.indexReads = 0;        // times .agent_index.json was read
+    this.MAX_REPEAT = 3;        // max identical consecutive calls
+    this.MAX_STAGNANT = 4;      // max steps without progress
+    this.MAX_INDEX_READS = 1;   // max times to re-read the index file
+  }
+
+  /**
+   * Hash tool call arguments for comparison.
+   */
+  _hashArgs(args) {
+    const str = typeof args === "string" ? args : JSON.stringify(args || {});
+    return createHash("md5").update(str).digest("hex").slice(0, 12);
+  }
+
+  /**
+   * Record a tool call and check for loops.
+   * @returns {string|null} - Warning message if loop detected, null otherwise
+   */
+  recordCall(name, args, step) {
+    const argsHash = this._hashArgs(args);
+    this.history.push({ name, argsHash, step });
+
+    // ---- Check 1: Block repeated reads of .agent_index.json ----
+    const parsedArgs = typeof args === "string" ? (() => { try { return JSON.parse(args); } catch { return {}; } })() : (args || {});
+    if (name === "read_file" && parsedArgs.path && parsedArgs.path.includes("agent_index.json")) {
+      this.indexReads++;
+      if (this.indexReads > this.MAX_INDEX_READS) {
+        return `⚠️ [LOOP BLOCKED] You already have the codebase index in your system prompt. Do NOT re-read .agent_index.json. Focus on the actual task files instead.`;
+      }
+    }
+
+    // ---- Check 2: Detect identical consecutive calls ----
+    if (this.history.length >= this.MAX_REPEAT) {
+      const recent = this.history.slice(-this.MAX_REPEAT);
+      const allSame = recent.every(
+        (call) => call.name === recent[0].name && call.argsHash === recent[0].argsHash
+      );
+      if (allSame) {
+        return `⚠️ [LOOP DETECTED] You have called '${name}' with identical arguments ${this.MAX_REPEAT} times in a row. This is unproductive. Change your strategy: try a different file, tool, or approach. If you're stuck, explain what's blocking you and call a different tool.`;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Track whether a step made progress (file modification).
+   * @param {string[]} toolNames - Tool names called in this step
+   * @returns {string|null} - Warning if stagnant, null otherwise
+   */
+  recordProgress(toolNames) {
+    const progressTools = ["write_file", "patch_file", "run_command"];
+    const madeProgress = toolNames.some((t) => progressTools.includes(t));
+
+    if (madeProgress) {
+      this.stagnantSteps = 0;
+      return null;
+    }
+
+    this.stagnantSteps++;
+    if (this.stagnantSteps >= this.MAX_STAGNANT) {
+      return `⚠️ [STAGNATION WARNING] You have gone ${this.stagnantSteps} consecutive steps without modifying any files or running commands. You appear to be stuck in a read-only loop. Take action: write code, patch a file, or run a command. If you cannot proceed, explain the blocker.`;
+    }
+
+    return null;
+  }
+}
 
 /**
  * Prepare an image URL for OpenAI multimodal schema.
@@ -86,9 +165,10 @@ export async function runAgent(task, maxSteps, existingMessages, image) {
     const workdir = process.env.WORKDIR || process.cwd();
     const resolvedWorkdir = resolve(workdir);
 
-    // Load codebase index if available
+    // Load codebase index from cache directory (not project root)
     let indexContext = "";
-    const indexFile = resolve(resolvedWorkdir, ".agent_index.json");
+    const cacheDir = getSwadesCacheDir(resolvedWorkdir);
+    const indexFile = resolve(cacheDir, "agent_index.json");
     if (existsSync(indexFile)) {
       try {
         const index = JSON.parse(await readFile(indexFile, "utf-8"));
@@ -105,6 +185,28 @@ export async function runAgent(task, maxSteps, existingMessages, image) {
       } catch (e) {
         console.log(chalk.dim(`⚠ Index load failed: ${e.message}`));
       }
+    }
+
+    // Detect project stack for context-aware behavior
+    let stackContext = "";
+    try {
+      const stack = await detectProjectStack(resolvedWorkdir);
+      if (stack.language !== "unknown") {
+        stackContext = `\n\n## DETECTED PROJECT STACK
+- Language: ${stack.language}
+- Runtime: ${stack.runtime}
+- Framework: ${stack.framework}
+- Package Manager: ${stack.packageManager}
+- Details: ${stack.details.join(", ")}
+
+STACK RULES:
+- Generate code compatible with the detected language and runtime.
+- Do NOT spawn Python subprocesses in a JavaScript/TypeScript project unless explicitly asked.
+- Do NOT generate JavaScript code for a Python project unless explicitly asked.
+- Match the project's existing coding patterns and conventions.`;
+      }
+    } catch (stackErr) {
+      console.log(chalk.dim(`⚠ Stack detection failed: ${stackErr.message}`));
     }
 
     const memoryContext = await getMemoryContext();
@@ -126,12 +228,13 @@ export async function runAgent(task, maxSteps, existingMessages, image) {
     }
 
     messages = [
-      { role: "system", content: SYSTEM_PROMPT + workspaceContext + indexContext + memoryContext },
+      { role: "system", content: SYSTEM_PROMPT + workspaceContext + indexContext + stackContext + memoryContext },
       { role: "user", content: userContent },
     ];
   }
 
   const toolsUsed = new Set();
+  const loopDetector = new LoopDetector();
 
   let estimatedDurationSeconds = 180;
   if (!existingMessages && task) {
@@ -267,17 +370,39 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       return answer;
     }
 
-    // Execute tools
+    // Execute tools with loop detection
+    const stepToolNames = [];
     for (const toolCall of response.tool_calls) {
       const { name, arguments: args } = toolCall.function;
       toolsUsed.add(name);
+      stepToolNames.push(name);
       console.log(chalk.magenta(`   → ${name}`));
+
+      // ---- Loop Detection: check before execution ----
+      const loopWarning = loopDetector.recordCall(name, args, step);
+      if (loopWarning) {
+        console.log(chalk.red.bold(`   ${loopWarning}`));
+        // Return the warning as the tool result instead of executing
+        messages.push({ role: "tool", tool_call_id: toolCall.id, content: loopWarning });
+        continue;
+      }
 
       const result = await executeTool(name, args);
       const preview = result.length > 200 ? result.slice(0, 200) + chalk.dim(`... (${result.length} chars)`) : result;
       console.log(chalk.gray(`   ${preview.split("\n").join("\n   ")}\n`));
 
       messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
+    }
+
+    // ---- Stagnation Detection: check after step ----
+    const stagnationWarning = loopDetector.recordProgress(stepToolNames);
+    if (stagnationWarning) {
+      console.log(chalk.red.bold(`   ${stagnationWarning}`));
+      // Inject as a system-level nudge
+      messages.push({
+        role: "user",
+        content: stagnationWarning,
+      });
     }
 
     console.log(chalk.dim("─".repeat(50)));

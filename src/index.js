@@ -11,6 +11,7 @@ import { runDirector } from "./director.js";
 import { runCUA } from "./cua.js";
 import { executeTool } from "./tools.js";
 import { callLLM } from "./llm.js";
+import { migrateAndCleanup } from "./cleanup.js";
 
 export { runAgent, runDirector, runCUA, executeTool };
 
@@ -19,7 +20,7 @@ async function detectModeWithAI(task) {
     return { isAutonomous: false, isCUA: false };
   }
 
-  console.log(chalk.dim("🤖 AI is deciding the optimal execution mode..."));
+  console.log(chalk.dim("🤖 Auto-detecting optimal execution mode..."));
 
   const systemPrompt = `You are the execution mode classifier for Swades Agent.
 Your job is to classify the user's task into one of the following execution modes:
@@ -38,17 +39,17 @@ Response MUST be a single word, one of: "cua", "autonomous", "normal". Do not wr
     const decision = response.content?.trim().toLowerCase() || "normal";
     
     if (decision.includes("cua")) {
-      console.log(chalk.cyan("   (AI classified task: CUA mode)"));
+      console.log(chalk.cyan("   → CUA mode (desktop automation)"));
       return { isAutonomous: false, isCUA: true };
     } else if (decision.includes("autonomous")) {
-      console.log(chalk.cyan("   (AI classified task: Autonomous mode)"));
+      console.log(chalk.cyan("   → Autonomous mode (Director-supervised)"));
       return { isAutonomous: true, isCUA: false };
     } else {
-      console.log(chalk.cyan("   (AI classified task: Normal mode)"));
+      console.log(chalk.cyan("   → Normal mode (single-run)"));
       return { isAutonomous: false, isCUA: false };
     }
   } catch (err) {
-    console.log(chalk.dim(`   (AI mode classification failed: ${err.message}. Defaulting to Normal mode.)`));
+    console.log(chalk.dim(`   (Auto-detect failed: ${err.message}. Using normal mode.)`));
     return { isAutonomous: false, isCUA: false };
   }
 }
@@ -86,6 +87,7 @@ async function getTaskAndMode() {
   const task = taskArgs.join(" ").trim();
 
   if (task) {
+    // CLI flags are power-user overrides — they skip auto-detection
     if (hasAutonomousFlag) {
       return { task, image, isAutonomous: true, isCUA: false };
     }
@@ -99,35 +101,27 @@ async function getTaskAndMode() {
     if (hasNormalFlag) {
       return { task, image, isAutonomous: false, isCUA: false };
     }
+    // No flag → AI auto-detects the best mode
     const aiMode = await detectModeWithAI(task);
     return { task, image, ...aiMode };
   }
 
-  // Interactive prompt
+  // ---- Zero-friction interactive prompt ----
+  // Only asks for the task. Mode is auto-detected. No choices, no paralysis.
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((res) => {
-    console.log(chalk.cyan.bold("\n  Swades Agent\n"));
-    rl.question(chalk.white.bold("Task → "), (taskAnswer) => {
-      rl.question(chalk.white.bold("Image path/URL (optional) → "), (imageAnswer) => {
-        rl.question(chalk.white.bold("Mode? [c]ua / [a]utonomous / [s]ubagents (no simulation) / [n]ormal / [enter] auto-detect → "), async (modeAnswer) => {
-          rl.close();
-          const m = modeAnswer.trim().toLowerCase();
-          const taskStr = taskAnswer.trim();
-          if (m === "c" || m === "cua") {
-            res({ task: taskStr, image: imageAnswer.trim() || null, isAutonomous: false, isCUA: true });
-          } else if (m === "a" || m === "autonomous") {
-            res({ task: taskStr, image: imageAnswer.trim() || null, isAutonomous: true, isCUA: false });
-          } else if (m === "s" || m === "subagents") {
-            process.env.SUBAGENTS_ONLY = "true";
-            res({ task: taskStr, image: imageAnswer.trim() || null, isAutonomous: false, isCUA: false });
-          } else if (m === "n" || m === "normal") {
-            res({ task: taskStr, image: imageAnswer.trim() || null, isAutonomous: false, isCUA: false });
-          } else {
-            const aiMode = await detectModeWithAI(taskStr);
-            res({ task: taskStr, image: imageAnswer.trim() || null, ...aiMode });
-          }
-        });
-      });
+    console.log(chalk.cyan.bold("\n  🚀 Swades Agent\n"));
+    console.log(chalk.dim("  Just describe what you want done. Mode is auto-detected.\n"));
+    rl.question(chalk.white.bold("  What do you need? → "), async (taskAnswer) => {
+      rl.close();
+      const taskStr = taskAnswer.trim();
+      if (!taskStr) {
+        res({ task: "", image: null, isAutonomous: false, isCUA: false });
+        return;
+      }
+      // Auto-detect mode from task description — zero user decisions
+      const aiMode = await detectModeWithAI(taskStr);
+      res({ task: taskStr, image: null, ...aiMode });
     });
   });
 }
@@ -143,6 +137,13 @@ async function main() {
   if (!process.env.API_KEY) {
     console.log(chalk.red("Missing API_KEY in .env"));
     process.exit(1);
+  }
+
+  // Migrate legacy files from project root to cache directory
+  if (!isCUA) {
+    const workdir = process.env.WORKDIR || process.cwd();
+    console.log(chalk.dim("🧹 Checking for legacy files to migrate..."));
+    await migrateAndCleanup(resolve(workdir));
   }
 
   // Index codebase only for coding tasks

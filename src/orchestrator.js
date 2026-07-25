@@ -118,7 +118,8 @@ async function mergeDiffs(results, baseDir) {
         await shell(`git apply "${diffFile}" 2>&1`, baseDir);
         console.log(chalk.green(`   ✅ [${result.label}] merged cleanly`));
         merged++;
-      } catch {
+      } catch (applyErr) {
+        console.log(chalk.dim(`   ⚠ Clean apply failed for [${result.label}]: ${applyErr.message}`));
         // Fallback to 3-way merge
         try {
           await shell(`git apply --3way "${diffFile}" 2>&1`, baseDir);
@@ -131,7 +132,7 @@ async function mergeDiffs(results, baseDir) {
         }
       }
     } finally {
-      try { await rm(diffFile, { force: true }); } catch { /* best-effort */ }
+      try { await rm(diffFile, { force: true }); } catch (rmErr) { console.log(chalk.dim(`   ⚠ Patch file cleanup failed: ${rmErr.message}`)); }
     }
   }
 
@@ -154,8 +155,8 @@ Your job: Manually apply the intended changes from this diff to the current code
         await runSubagent(`merge-${conflict.label}`, mergeTask, baseDir);
         merged++;
         failed--;
-      } catch {
-        console.log(chalk.red(`   ❌ Merge resolution for [${conflict.label}] also failed`));
+      } catch (mergeResErr) {
+        console.log(chalk.red(`   ❌ Merge resolution for [${conflict.label}] also failed: ${mergeResErr.message}`));
       }
     }
   }

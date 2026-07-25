@@ -10,9 +10,14 @@
 </p>
 
 <p align="center">
-  <a href="#setup--installation">Setup</a> ·
-  <a href="#how-to-run">How to Run</a> ·
-  <a href="walkthrough.md">Walkthrough & Feature Guide</a> ·
+  <a href="https://www.npmjs.com/package/@xerv/swades-agent"><img src="https://img.shields.io/npm/v/@xerv/swades-agent?style=flat&label=npm" alt="npm version"/></a>
+  <a href="https://open-vsx.org/extension/xerv/swades-agent"><img src="https://img.shields.io/open-vsx/v/xerv/swades-agent?style=flat&label=Open%20VSX" alt="Open VSX version"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Electroiscoding/Swades-Agent?style=flat" alt="License"/></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#how-to-use">How to Use</a> ·
   <a href="#tools">Tools</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#safety--guardrails">Safety</a>
@@ -26,27 +31,27 @@ Swades Agent is an open-source, terminal-native autonomous AI coding agent built
 
 It works with any **OpenAI-compatible API** (OpenAI, OpenRouter, Groq, Ollama, etc.), streams tokens to the terminal in real-time as the model thinks, and runs automatic syntax validation on every file it writes.
 
-No GUI. No cloud lock-in. No build step. **~3,500 total lines of code** (~2,600+ lines of clean Node.js and ~900 lines of Python helpers).
+No GUI. No cloud lock-in. No build step. **Zero configuration choices at runtime — just describe your task and go.**
 
 <details>
 <summary><b>📊 Codebase Line Count Breakdown</b></summary>
 
 | File | Language | Lines of Code | Description |
 | :--- | :--- | :---: | :--- |
-| [`src/cua.js`](file:///home/soham/reactsystemlearning1/src/cua.js) | JavaScript | 596 | CUA desktop orchestrator |
-| [`src/simulator.js`](file:///home/soham/reactsystemlearning1/src/simulator.js) | JavaScript | 505 | Sandbox Simulation Engine |
-| [`src/tools.js`](file:///home/soham/reactsystemlearning1/src/tools.js) | JavaScript | 502 | File operations, syntax checking, and shell tools |
-| [`src/orchestrator.js`](file:///home/soham/reactsystemlearning1/src/orchestrator.js) | JavaScript | 234 | Parent orchestrator, parallel subagents, worktree manager |
-| [`src/subagent.js`](file:///home/soham/reactsystemlearning1/src/subagent.js) | JavaScript | 177 | Subagent lifecycle and setup |
-| [`src/agent.js`](file:///home/soham/reactsystemlearning1/src/agent.js) | JavaScript | 140 | Core ReAct agentic loop |
-| [`src/prompts.js`](file:///home/soham/reactsystemlearning1/src/prompts.js) | JavaScript | 120 | System prompts & function-calling schemas |
-| [`src/llm.js`](file:///home/soham/reactsystemlearning1/src/llm.js) | JavaScript | 107 | OpenAI API wrapper & token streaming client |
-| [`src/director.js`](file:///home/soham/reactsystemlearning1/src/director.js) | JavaScript | 95 | Autonomous Director loop supervisor |
-| [`src/index.js`](file:///home/soham/reactsystemlearning1/src/index.js) | JavaScript | 83 | CLI entry point and argument parser |
-| [`src/memory.js`](file:///home/soham/reactsystemlearning1/src/memory.js) | JavaScript | 79 | Session persistence & context injection |
-| [`src/cua_helper.py`](file:///home/soham/reactsystemlearning1/src/cua_helper.py) | Python | 768 | GNOME Mutter RDP/ScreenCast Wayland automation helper |
-| [`src/take_portal_screenshot.py`](file:///home/soham/reactsystemlearning1/src/take_portal_screenshot.py) | Python | 111 | Pipewire video stream frame grabber |
-| **Total** | | **3,517** | |
+| [`src/cua.js`](src/cua.js) | JavaScript | 596 | CUA desktop orchestrator |
+| [`src/simulator.js`](src/simulator.js) | JavaScript | 505 | Sandbox Simulation Engine |
+| [`src/tools.js`](src/tools.js) | JavaScript | 600+ | File operations, syntax checking, stack detection, shell tools |
+| [`src/agent.js`](src/agent.js) | JavaScript | 290+ | Core ReAct agentic loop + loop detection |
+| [`src/orchestrator.js`](src/orchestrator.js) | JavaScript | 254 | Parent orchestrator, parallel subagents, worktree manager |
+| [`src/subagent.js`](src/subagent.js) | JavaScript | 180+ | Subagent lifecycle and setup |
+| [`src/llm.js`](src/llm.js) | JavaScript | 190+ | OpenAI API wrapper, streaming, multi-model fallback cascade |
+| [`src/prompts.js`](src/prompts.js) | JavaScript | 170+ | System prompts & function-calling schemas |
+| [`src/director.js`](src/director.js) | JavaScript | 110 | Autonomous Director loop supervisor |
+| [`src/index.js`](src/index.js) | JavaScript | 170+ | CLI entry point and argument parser |
+| [`src/memory.js`](src/memory.js) | JavaScript | 90+ | Session persistence & context injection |
+| [`src/cleanup.js`](src/cleanup.js) | JavaScript | 100+ | Cache dir management & legacy migration |
+| [`src/cua_helper.py`](src/cua_helper.py) | Python | 768 | GNOME Mutter RDP/ScreenCast Wayland automation helper |
+| [`src/take_portal_screenshot.py`](src/take_portal_screenshot.py) | Python | 111 | Pipewire video stream frame grabber |
 
 </details>
 
@@ -55,71 +60,154 @@ No GUI. No cloud lock-in. No build step. **~3,500 total lines of code** (~2,600+
 ## Key Capabilities
 
 - **ReAct agentic loop** — Thought → Tool Call → Observation → repeat until task is solved
+- **Zero-choice UX** — just type your task. Mode (normal / autonomous / CUA) is auto-detected by AI
 - **Real-time token streaming** — see the model's reasoning and tool arguments token-by-token as they arrive
+- **Multi-model fallback cascade** — automatically retries on rate limits (429), payment errors (402), and service outages with configurable fallback models
+- **Intelligent loop detection** — catches repetitive tool calls, blocks infinite index file reads, detects stagnation
+- **Stack-aware code generation** — auto-detects project language/framework (JS, Python, Rust, Go, Java) and generates matching code
+- **Repository cleanliness** — all agent metadata stored in `~/.cache/swades/`, never in your project root
 - **Partial file patching** — edits only the exact block that needs changing, not the entire file (saves tokens, preserves indentation)
-- **Automatic codebase indexing** — maps your repo structure (imports, exports, classes, functions) before starting, so the model never re-scans blindly
-- **Built-in syntax checker** — validates bracket matching, indentation consistency, and runs `node --check` on every JS save
-- **24/7 Director mode** — a second "Director" model instance reviews progress after each run and writes the next subtask on behalf of the user, iterating autonomously
-- **Session memory** — persists a summary of each run to `.agent_memory.json` and injects recent context into the next session
-- **Workspace isolation** — when installed inside a project subdirectory, the agent hides its own files from the model so it only sees your code
+- **Automatic codebase indexing** — maps your repo structure (imports, exports, classes, functions) before starting
+- **Built-in syntax checker** — validates bracket matching, indentation consistency, `node --check` for JS, `py_compile` for Python
+- **24/7 Director mode** — a second "Director" model instance reviews progress after each run and writes the next subtask on behalf of the user
+- **Session memory** — persists a summary of each run and injects recent context into the next session
+- **Defensive coding** — all errors are logged, never silently swallowed
 
 ---
 
-## Setup & Installation
+## Install
 
-### Step 1: Install Node.js
-
-You need **Node.js v18 or later** (v22 recommended).
+### Option 1: Install from npm (Recommended for CLI usage)
 
 ```bash
-node -v
+npm install -g @xerv/swades-agent
 ```
 
-If not installed, download from [nodejs.org](https://nodejs.org/) or use a version manager like [nvm](https://github.com/nvm-sh/nvm).
+That's it. Now you can run it from **any directory**:
 
-### Step 2: Clone & Install Dependencies
+```bash
+# Navigate to your project
+cd ~/my-project
+
+# Set up your API key (first time only)
+export API_KEY=sk-or-v1-your-key-here
+
+# Run it
+swades-agent "Add input validation to the login form"
+```
+
+Or use a `.env` file in your project root:
+
+```bash
+# Create .env in your project
+echo "API_KEY=sk-or-v1-your-key-here" > .env
+echo "BASE_URL=https://openrouter.ai/api/v1" >> .env
+echo "MODEL=openrouter/free" >> .env
+
+# Run it
+swades-agent "Fix the failing tests in src/auth.js"
+```
+
+> **Note:** When installed globally via npm, Swades Agent automatically uses your **current working directory** as the workspace. Just `cd` into your project and run.
+
+---
+
+### Option 2: Install from Open VSX / VS Code Marketplace
+
+Search for **"Swades Agent"** by publisher **xerv** in your editor's extension marketplace:
+
+- **VS Code / Cursor / Windsurf**: Open Extensions (`Ctrl+Shift+X`) → Search "Swades Agent" → Install
+- **Open VSX compatible editors**: Search at [open-vsx.org/extension/xerv/swades-agent](https://open-vsx.org/extension/xerv/swades-agent)
+
+After installing:
+
+1. Open your project workspace in the editor
+2. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac) to open the Command Palette
+3. Type **"Swades Agent: Run Task"** and press Enter
+4. Type your task → Done. Mode is auto-detected.
+
+> **Note:** The extension runs Swades Agent in an integrated terminal within your editor. You still need an API key — create a `.env` file in your project root with your `API_KEY`.
+
+---
+
+### Option 3: Clone from GitHub (for development / contribution)
 
 ```bash
 git clone https://github.com/Electroiscoding/Swades-Agent.git
 cd Swades-Agent
 npm install
-```
-
-This installs three packages: `openai` (API client), `dotenv` (env loading), and `chalk` (terminal colors).
-
-### Updating Existing Clones (from old repository name)
-
-If you previously cloned the repository under its old name (`reactsystemlearning1`), you can update your local copy to point to the new URL and pull the latest features (including streaming fixes and branding) with:
-
-```bash
-# 1. Update the remote URL to the new name
-git remote set-url origin https://github.com/Electroiscoding/Swades-Agent.git
-
-# 2. Pull the latest code from the main branch
-git pull origin main
-
-# 3. Update dependencies
-npm install
-```
-
-### Step 3: Configure your Environment
-
-**Mac / Linux:**
-```bash
 cp .env.example .env
+# Edit .env with your API key
+npm start
 ```
 
-**Windows:**
-```cmd
-copy .env.example .env
+---
+
+## How to Use
+
+### The Simple Way (zero decisions)
+
+Just describe what you want. Swades figures out the rest.
+
+**Interactive:**
+```bash
+swades-agent
+# or: npm start (if cloned from GitHub)
+# or: Ctrl+Shift+P → "Swades Agent: Run Task" (if using VS Code extension)
+
+🚀 Swades Agent
+
+  Just describe what you want done. Mode is auto-detected.
+
+  What do you need? → Add input validation to the login form and run tests
+  🤖 Auto-detecting optimal execution mode...
+   → Autonomous mode (Director-supervised)
 ```
 
-Open `.env` and fill in your values:
+**One-liner:**
+```bash
+swades-agent "Write a hello world script in Python"
+swades-agent "Refactor the entire codebase to TypeScript and verify it compiles"
+swades-agent "Go to Chrome and search for cat pictures"
+```
+
+Swades auto-detects whether your task needs:
+- **Normal mode** — simple single-run tasks (explanations, quick edits, commands)
+- **Autonomous mode** — complex multi-step tasks (features, refactors, debugging)
+- **CUA mode** — desktop GUI automation (clicking, typing, screenshots)
+
+### Power-User Flags (optional overrides)
+
+If you want to force a specific mode, use CLI flags:
+
+```bash
+swades-agent "Build a REST API" --autonomous    # Force Director-supervised mode
+swades-agent "Open Firefox" --cua               # Force desktop automation mode
+swades-agent "Run git status" --normal          # Force single-run mode
+swades-agent "Refactor tests" --subagents       # Force parallel subagent decomposition
+swades-agent "Describe this mockup" --image design.png  # Attach an image
+```
+
+### Image & Multimodal Support
+
+```bash
+swades-agent "Implement this UI design" --image mockup.png
+swades-agent "What's in this screenshot?" -i https://example.com/screenshot.png
+```
+
+---
+
+## Environment Configuration
+
+Create a `.env` file in your project root:
 
 ```env
 API_KEY=sk-or-v1-your-key-here
 BASE_URL=https://openrouter.ai/api/v1
 MODEL=openrouter/free
+
+# Optional: Fallback models for automatic failover on rate limits
+FALLBACK_MODELS=nousresearch/deephermes-3-llama-3-8b-preview:free,deepseek/deepseek-chat-v3-0324:free
 ```
 
 **All supported environment variables:**
@@ -129,7 +217,8 @@ MODEL=openrouter/free
 | `API_KEY` | Yes | — | Your LLM provider API key |
 | `BASE_URL` | No | `https://openrouter.ai/api/v1` | Provider base URL (change for OpenAI, Groq, Ollama, etc.) |
 | `MODEL` | No | `openrouter/free` | Model identifier string |
-| `MAX_STEPS` | No | `30` | Max tool-call iterations per agent run before hard stop |
+| `FALLBACK_MODELS` | No | — | Comma-separated fallback model list for auto-failover on 429/402/403 |
+| `MAX_STEPS` | No | `∞` | Max tool-call iterations per agent run |
 | `MAX_OUTPUT_LENGTH` | No | `10000` | Character cap on tool output returned to the model |
 | `WORKDIR` | No | `process.cwd()` | Absolute or relative path the agent operates on |
 
@@ -152,88 +241,23 @@ BASE_URL=http://localhost:11434/v1
 MODEL=qwen2.5-coder:7b
 ```
 
-**Important — running inside another project:**
-
-If you clone this repo as a subfolder inside your own codebase (e.g. `myproject/swades-agent/`), add this to `.env` so the agent targets your project root and not its own folder:
-
-```env
-WORKDIR=../
-```
-
----
-
-## How to Run
-
-### Standard Mode (single task, one run)
-
-The agent executes the task from start to finish in a single session and exits when done.
-
-**Interactive prompt:**
-```bash
-npm start
-# Answer the task question, then answer N to the autonomous mode question
-```
-
-**Direct task via argument:**
-```bash
-node src/index.js "Write a hello world script in Python"
-node src/index.js "Add input validation to the login form in src/auth.js"
-node src/index.js "Find all TODO comments in the codebase and open a summary file"
-```
-
-### 24/7 Autonomous Mode (Director-supervised, multi-cycle)
-
-In autonomous mode, a second "Director" model instance supervises the worker. After each worker run, the Director reviews the full conversation history and writes the next subtask prompt on behalf of the user. This repeats until the Director determines the goal is fully achieved.
-
-**Interactive prompt:**
-```bash
-npm start
-# Answer the task question, then answer Y to the autonomous mode question
-```
-
-**Direct task via argument:**
-```bash
-node src/index.js "Create a fully functional REST API with tests, run them, and fix any failures" --autonomous
-node src/index.js "Refactor the entire codebase to TypeScript and verify it compiles" --autonomous
-```
-
-The `--autonomous` flag (or `-a`) activates the Director loop. The Director runs for up to 5 cycles by default.
-
-### Image & Multimodal Support
-
-You can attach local images or remote web URLs to your task prompts. This is useful for providing design mockups, wireframes, screenshots of layout bugs, or architecture diagrams directly to the agent.
-
-**Interactive prompt:**
-```bash
-npm start
-# 1. Enter your task
-# 2. Enter the local path or remote URL to the image when prompted (e.g. `arch.png`)
-```
-
-**Direct task via argument (using `--image` or `-i`):**
-```bash
-# Using a local image
-node src/index.js "Describe this architecture diagram in detail" --image arch.png
-
-# Using a remote web image URL
-node src/index.js "Analyze this UI mockup and implement the styled header" -i https://example.com/mockup.png
-```
-
 ---
 
 ## Tools
 
-The agent has access to 7 tools it can call during a run:
+The agent has access to 9 tools it can call during a run:
 
 | Tool | Arguments | Description |
 |---|---|---|
-| `index_codebase` | _(none)_ | Scans workspace, writes `.agent_index.json` with file paths, sizes, imports, exports, classes, functions |
+| `index_codebase` | _(none)_ | Scans workspace, generates codebase index with file paths, sizes, imports, exports, classes, functions |
 | `read_file` | `path`, `start_line?`, `end_line?` | Returns file contents with line numbers. Supports partial reads by line range. |
 | `write_file` | `path`, `content` | Writes a complete new file. Runs syntax + indentation checks on save. |
-| `patch_file` | `path`, `target`, `replacement` | Replaces a unique block within an existing file. Space-sensitive. Fails with a clear error if target is ambiguous or not found. |
+| `patch_file` | `path`, `target`, `replacement` | Replaces a unique block within an existing file. Space-sensitive. |
 | `list_dir` | `path`, `recursive?` | Lists directory tree. Skips `node_modules`, `.git`, and the agent's own folder. |
-| `grep_search` | `pattern`, `path`, `include?` | Runs `grep -rnI` across the workspace. Excludes the agent directory automatically. |
-| `run_command` | `command`, `cwd?` | Executes a shell command with 30s timeout. Prompts for user confirmation on destructive patterns. |
+| `grep_search` | `pattern`, `path`, `include?` | Runs `grep -rnI` across the workspace. |
+| `run_command` | `command`, `cwd?` | Executes a shell command with 30s timeout. |
+| `peek_terminal` | `action?` | Check background process output or terminate it. |
+| `extend_deadline` | `additional_seconds`, `reason` | Extend the task time limit if more time is needed. |
 
 **Automatic validation on every write:**
 
@@ -242,6 +266,7 @@ Both `write_file` and `patch_file` run these checks immediately after writing an
 - Bracket matching: detects unclosed `{`, `(`, `[` and mismatched pairs
 - Indentation consistency: flags mixed tabs + spaces; flags sudden indentation jumps
 - JS/MJS/CJS: runs `node --check <file>` for compiler-level syntax errors
+- Python: runs `python3 -m py_compile` for syntax validation
 - JSON: runs `JSON.parse()` on the written content
 
 ---
@@ -321,24 +346,20 @@ Make sure your user session is authorized to run Mutter Remote Desktop sessions.
 
 ### How to Run CUA Mode
 
-#### Method 1: Interactive Prompt (Recommended)
-1. Start the agent:
-   ```bash
-   npm start
-   ```
-2. Enter your goal when prompted (e.g. `go to notepad and type hello world and save it`).
-3. Under **Mode**, type `c` (or `cua`) and press Enter.
+CUA mode is auto-detected when your task mentions GUI, desktop, browser, or app interactions. Or force it:
 
-#### Method 2: Command Line Argument
-Pass your prompt and add the `--cua` or `-c` flag:
 ```bash
-node src/index.js "go to notepad and type hello world" --cua
+swades-agent "go to notepad and type hello world and save it"
+# Auto-detects → CUA mode
+
+swades-agent "open Chrome and search for Node.js docs" --cua
+# Forced → CUA mode
 ```
 
 ---
 
 ### Advanced Click-Loop Safety Guardrail
-To safeguard against models getting stuck in infinite loops (for example, clicking the same spot repeatedly on a frozen or unresponsive GUI element), Swades Agent implements a strict **repeat click prevention check** directly inside the orchestrator ([cua.js](file:///home/soham/reactsystemlearning1/src/cua.js)):
+To safeguard against models getting stuck in infinite loops (for example, clicking the same spot repeatedly on a frozen or unresponsive GUI element), Swades Agent implements a strict **repeat click prevention check** directly inside the orchestrator ([cua.js](src/cua.js)):
 
 1. **Bounding Box Proximity**: Clicks are tracked by their coordinates. Any click that falls within a **25px horizontal and 15px vertical bounding box** of a previous click is classified as being in the "same area".
 2. **Consecutive Block**: The model is forbidden from clicking the same area consecutively (back-to-back). If it attempts to do so:
@@ -358,21 +379,25 @@ This feedback forces the model to self-correct, try alternative UI pathways, or 
 
 ```
 src/
-  index.js      CLI entry point — reads task from args or stdin, runs auto-index, dispatches to agent or director
-  agent.js      ReAct loop — message history, streaming LLM call, tool dispatch, observation injection
+  index.js      CLI entry point — zero-choice UX, auto-detects mode, dispatches to agent/director/CUA
+  agent.js      ReAct loop — loop detection, stack detection, streaming LLM call, tool dispatch
   director.js   Director loop — runs worker across cycles, reviews history, writes next subtask prompt
-  llm.js        OpenAI SDK wrapper — stream=true, reconstructs full message from SSE delta chunks
-  tools.js      7 tool implementations + heuristic syntax checker + codebase indexer
-  prompts.js    System prompt (JSONL-structured) + OpenAI function-calling tool schemas
-  memory.js     Appends session summaries to .agent_memory.json, injects recent context at startup
+  llm.js        OpenAI SDK wrapper — streaming, multi-model fallback cascade on 429/402/403
+  tools.js      9 tool implementations + heuristic syntax checker + codebase indexer + stack detection
+  prompts.js    System prompt + anti-loop rules + stack-aware guidance + tool schemas
+  memory.js     Session persistence in ~/.cache/swades/ (never in project root)
+  cleanup.js    Cache directory management, legacy file migration
+  subagent.js   Parallel subagent lifecycle with /tmp worktrees (never in project root)
+  orchestrator.js  Task complexity evaluation, subagent spawning, diff merging
+  simulator.js  Multi-scenario sandbox simulation engine
 ```
 
 **Single-run message flow:**
 ```
-index.js → index_codebase() → agent.js loop:
-  [system + memory + task] → LLM (streaming SSE)
+index.js → migrate legacy files → index_codebase() → agent.js loop:
+  [system + memory + stack + task] → LLM (streaming SSE)
     → text delta    → printed live to terminal
-    → tool_call delta → executeTool() → observation → appended to messages
+    → tool_call delta → loop check → executeTool() → observation → appended to messages
   repeat until LLM returns no tool calls → print final answer → exit
 ```
 
@@ -389,19 +414,23 @@ director.js → cycle 1..N:
 
 ## Safety & Guardrails
 
-- **Workspace isolation & self-hiding** — when installed as a subdirectory of the target project, the agent filters out its own folder from `list_dir` and `grep_search`. The model cannot see, read, or modify its own source files, which prevents it from getting confused about which codebase it is working on.
+- **Workspace isolation & self-hiding** — when installed as a subdirectory of the target project, the agent filters out its own folder from `list_dir` and `grep_search`. The model cannot see, read, or modify its own source files.
+- **Repository cleanliness** — all agent metadata (index, memory, terminal logs) stored in `~/.cache/swades/`, worktrees in `/tmp/`. Your project root stays 100% clean.
+- **Loop detection** — blocks repeated identical tool calls, prevents index file re-reading, detects stagnation after 4 steps without file modifications.
+- **Multi-model fallback** — automatically retries on 429/402/403/503 with configurable fallback models instead of crashing.
 - **Dangerous command blocking** — shell commands matching `rm -rf`, `sudo`, `kill`, `dd if=`, `chmod 777`, `:(){`, and others pause execution and require an explicit `y` typed in the terminal before running.
 - **Step cap** — by default, the worker agent has NO step limit (`Infinity` steps), enabling execution of long-running or highly complex developer tasks. You can optionally cap it by setting `MAX_STEPS` in `.env`.
 - **Director cycle cap** — by default, the Director loop has NO cycle limit (`Infinity` cycles) to iteratively direct the worker agent until the overall goal is fully complete.
 - **Context Condensation** — uses OpenRouter's `context-compression` plugin to dynamically condense prompt histories when they approach context limits, preventing token overflows during long executions.
 - **Timeout** — `run_command` automatically times out after 30 seconds.
 - **Workspace scoping** — all file paths passed to tools are resolved relative to `WORKDIR`. The agent cannot access paths outside of it.
+- **Defensive coding** — all internal errors are logged with context, never silently swallowed.
 
 ---
 
 ## Session Memory
 
-After each completed run, the agent appends a session record to `.agent_memory.json`:
+After each completed run, the agent appends a session record to `~/.cache/swades/<project>/agent_memory.json`:
 
 ```json
 {
@@ -427,7 +456,7 @@ When you run a coding task, the orchestrator automatically evaluates it:
 
 ### Step 2: Isolated Parallel Subtask Spawning
 * The parent orchestrator breaks down the main task into 2 to 5 concrete subtasks.
-* It uses **Git Worktrees** to spin up isolated workspace directories (located under `.swades_worktrees/`).
+* It uses **Git Worktrees** in `/tmp/swades_worktrees/` to spin up isolated workspace directories.
 * Subagents run concurrently (up to 5 parallel processes, managed by a semaphore queue).
 * Since each subagent writes code in its own worktree, there is **zero risk of file corruption or dirty edits** during development.
 
@@ -439,7 +468,7 @@ When you run a coding task, the orchestrator automatically evaluates it:
 
 ### Step 4: Multi-Scenario Sandbox Simulation
 * Before committing simulated changes to real-life files, the Simulation Engine generates **2 to 4 alternative implementation scenarios** representing different architectural strategies.
-* Each scenario is run inside its own transient sandbox directory (`.swades_sandboxes/`).
+* Each scenario is run inside its own transient sandbox directory.
 * The engine compiles the code in each sandbox (verifying JS syntax with `node --check` and project builds with `package.json` scripts) and runs automated test suites.
 * The LLM reviews the results and selects the single **best-performing winner scenario** (based on diff cleanliness and compilation/test success).
 
@@ -448,11 +477,22 @@ Once a scenario is chosen, it goes through three safety gates:
 1. **Workspace Git Rebase Check**: Verifies the main repository hasn't moved forward. If it has, it performs an automatic non-destructive git rebase.
 2. **Shadow Verification**: Applies the winning diff to a clean temporary verification worktree and executes builds to guarantee 100% correctness.
 3. **Live Workspace Mutation**: Applies the verified diff to your active workspace, creating clean, compilation-passing modifications.
-4. **Telemetry Delta Report**: Generates `.swades_simulation_report.json` showcasing simulated expectations vs. final verified real-life outcome.
+4. **Telemetry Delta Report**: Generates simulation report showcasing simulated expectations vs. final verified real-life outcome.
 
 ---
 
-## What's New in v3.1, v3.0, v2.1 & v2.0
+## What's New in v2.0
+
+* **Zero-Choice UX (v2.0)** — Eliminated user choice paralysis. Interactive mode asks only for the task; mode is auto-detected by AI. No more "choose mode" prompts.
+* **Multi-Model Fallback Cascade (v2.0)** — Automatic failover on 429 Rate Limit, 402 Payment Required, 403 Forbidden, and 503 Service Unavailable. Configure `FALLBACK_MODELS` in `.env`.
+* **Intelligent Loop Detection (v2.0)** — `LoopDetector` class catches repeated identical tool calls (3x threshold), blocks re-reading `.agent_index.json`, and detects stagnation (4+ steps without file modifications).
+* **Repository Cleanliness (v2.0)** — All metadata (`.agent_index.json`, `.agent_memory.json`, terminal logs) moved to `~/.cache/swades/`. Worktrees moved to `/tmp/swades_worktrees/`. Your project root stays 100% clean.
+* **Stack-Aware Code Generation (v2.0)** — Auto-detects project stack from `package.json`, `requirements.txt`, `Cargo.toml`, `go.mod`, `build.gradle`, etc. Injects language/runtime/framework context into the system prompt. Prevents cross-language subprocess spawns.
+* **Python Syntax Validation (v2.0)** — `py_compile` check on every `.py` file write, in addition to existing `node --check` for JS.
+* **Defensive Coding (v2.0)** — All bare `catch {}` blocks replaced with structured error logging. No more silently swallowed exceptions.
+* **Anti-Loop Prompt Rules (v2.0)** — System prompt now includes explicit anti-loop and stack-awareness rules to prevent the agent from getting trapped.
+
+### Previous Releases
 
 * **Self-Healing Linter Auto-Fix (v3.1)** — Automatically repairs unclosed brackets, mixed indentation, and invalid JSON formatting on save operations.
 * **Conditional Indentation Validation (v3.1)** — Bypasses indentation alerts for non-indentation-sensitive files (JS, CSS, HTML, Markdown), restricting strict indentation rules to Python and YAML.
@@ -467,9 +507,9 @@ Once a scenario is chosen, it goes through three safety gates:
 * **Anti-Loop Click Protection (v2.1)** — automatic consecutive and overall frequency limits on spatial clicks (using a 25px x 15px bounding box) to prevent looping click sequences.
 * **JSON System Instructions (v2.1)** — system prompt structured as a clean, high-compliance JSON schema to enforce reasoning/ReAct rules.
 * **24/7 Director Loop (v2.0)** — autonomous multi-cycle execution with a supervising Director model. Pass `--autonomous` to any task.
-* **Codebase Indexing (v2.0)** — automatic `index_codebase` run at startup generates `.agent_index.json` with the full repository structure so the model starts with deep context.
+* **Codebase Indexing (v2.0)** — automatic `index_codebase` run at startup generates codebase index with the full repository structure so the model starts with deep context.
 * **Partial File Patching (v2.0)** — `patch_file` tool for surgical block-level edits. Preserves exact indentation. Saves significant tokens vs. full-file rewrites.
 * **Static Syntax Guardrails (v2.0)** — automatic bracket matching, indentation checks, `node --check`, and JSON parse validation on every file save, with errors returned to the model for self-correction.
 * **Real-time Token Streaming (v2.0)** — LLM reasoning, tool names, and arguments stream to the terminal token-by-token using OpenAI SDK SSE.
-* **Session Memory (v2.0)** — cross-run context via `.agent_memory.json`.
+* **Session Memory (v2.0)** — cross-run context via session memory.
 * **Referer attribution (v2.0)** — all API calls include `HTTP-Referer: https://xerv.netlify.app/swades.html` for OpenRouter analytics tracking.

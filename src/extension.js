@@ -4,14 +4,15 @@ import * as path from 'path';
 export function activate(context) {
   console.log('Swades Agent terminal extension is active!');
 
-  // Register the general run command
+  // Single command — zero choice paralysis.
+  // Just asks for the task, mode is auto-detected by AI.
   context.subscriptions.push(
     vscode.commands.registerCommand('swades-agent.run', () => {
-      runSwadesTerminal(context, null);
+      runSwadesTerminal(context);
     })
   );
 
-  // Register direct mode shortcuts
+  // Power-user shortcuts (hidden from main command palette UX)
   context.subscriptions.push(
     vscode.commands.registerCommand('swades-agent.runAutonomous', () => {
       runSwadesTerminal(context, 'autonomous');
@@ -27,7 +28,7 @@ export function activate(context) {
 
 export function deactivate() {}
 
-async function runSwadesTerminal(context, mode) {
+async function runSwadesTerminal(context, forcedMode) {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders || workspaceFolders.length === 0) {
     vscode.window.showErrorMessage('Please open a workspace folder before running Swades Agent.');
@@ -37,9 +38,9 @@ async function runSwadesTerminal(context, mode) {
   const workspacePath = workspaceFolders[0].uri.fsPath;
   const indexJsPath = path.join(context.extensionPath, 'src', 'index.js');
 
-  // 1. Prompt for Task
+  // 1. Only ask for the task — that's it. Zero paralysis.
   const task = await vscode.window.showInputBox({
-    prompt: "Enter your task/goal for Swades Agent",
+    prompt: "What do you need? (mode is auto-detected)",
     placeHolder: "e.g., Add email verification to auth.js and run tests",
     ignoreFocusOut: true,
     validateInput: (value) => {
@@ -49,52 +50,18 @@ async function runSwadesTerminal(context, mode) {
 
   if (!task) return;
 
-  // 2. Resolve Mode
-  let selectedMode = mode;
-  if (!selectedMode) {
-    const modeChoice = await vscode.window.showQuickPick([
-      { label: "Normal Mode", detail: "Executes the task from start to finish in a single worker session" },
-      { label: "Autonomous Mode", detail: "Runs worker directed by a supervising supervisor loop (Director Mode)" },
-      { label: "CUA Mode", detail: "Executes graphical desktop automation tasks (Computer Use)" }
-    ], {
-      placeHolder: "Select execution mode for Swades Agent",
-      ignoreFocusOut: true
-    });
-
-    if (!modeChoice) return;
-
-    if (modeChoice.label.includes("Autonomous")) {
-      selectedMode = "autonomous";
-    } else if (modeChoice.label.includes("CUA")) {
-      selectedMode = "cua";
-    } else {
-      selectedMode = "normal";
-    }
-  }
-
-  // 3. Prompt for Image (Optional)
-  const image = await vscode.window.showInputBox({
-    prompt: "Specify local image path or URL (Optional)",
-    placeHolder: "e.g., arch.png (press Enter to skip)",
-    ignoreFocusOut: true
-  });
-
-  // 4. Formulate command and escape parameters safely for shell execution
+  // 2. Build command — mode is either forced (power-user shortcut) or auto-detected by AI
   const escapedTask = task.replace(/"/g, '\\"');
   let cmd = `node "${indexJsPath}" "${escapedTask}"`;
 
-  if (selectedMode === 'autonomous') {
+  if (forcedMode === 'autonomous') {
     cmd += ' --autonomous';
-  } else if (selectedMode === 'cua') {
+  } else if (forcedMode === 'cua') {
     cmd += ' --cua';
   }
+  // No flag = AI auto-detects the mode. No user decision needed.
 
-  if (image && image.trim()) {
-    const escapedImage = image.trim().replace(/"/g, '\\"');
-    cmd += ` --image "${escapedImage}"`;
-  }
-
-  // 5. Retrieve or Create VS Code Terminal
+  // 3. Retrieve or Create VS Code Terminal
   let terminal = vscode.window.terminals.find(t => t.name === "Swades Agent");
   if (!terminal) {
     terminal = vscode.window.createTerminal({

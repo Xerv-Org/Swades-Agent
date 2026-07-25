@@ -1,7 +1,7 @@
 {
   "name": "swades-agent",
   "displayName": "Swades Agent",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "license": "MIT",
   "publisher": "xerv",
   "icon": "logos/swades-clean-removebg-preview.png",

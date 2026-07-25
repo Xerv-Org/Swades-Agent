@@ -1,5 +1,6 @@
 // ============================================================
 // subagent.js — Isolated worktree subagent lifecycle + semaphore
+// Worktrees now use OS temp directory instead of polluting project root
 // ============================================================
 
 import { exec } from "node:child_process";
@@ -10,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import chalk from "chalk";
 import { runAgent } from "./agent.js";
 import { executeTool } from "./tools.js";
+import { getWorktreeTempDir } from "./cleanup.js";
 
 // ---- Concurrency Semaphore ----
 
@@ -55,16 +57,17 @@ function shell(cmd, cwd) {
   });
 }
 
-// ---- Worktree lifecycle ----
-
-const WORKTREE_ROOT = ".swades_worktrees";
+// ---- Worktree lifecycle (now uses OS temp directory) ----
 
 /**
  * Create an isolated git worktree for a subagent.
+ * Uses OS temp directory (/tmp/swades_worktrees/<project-hash>/) instead of
+ * .swades_worktrees/ in the project root to keep the user's repo clean.
+ *
  * Returns the absolute path to the worktree directory.
  */
 async function createWorktree(label, baseDir) {
-  const root = resolve(baseDir, WORKTREE_ROOT);
+  const root = getWorktreeTempDir(baseDir);
   await mkdir(root, { recursive: true });
 
   const dirName = `${label.replace(/[^a-zA-Z0-9_-]/g, "_")}-${randomUUID().slice(0, 8)}`;
@@ -72,7 +75,7 @@ async function createWorktree(label, baseDir) {
 
   // Create a detached worktree from current HEAD
   await shell(`git worktree add --detach "${worktreePath}" HEAD`, baseDir);
-  console.log(chalk.dim(`   📂 Worktree created: ${dirName}`));
+  console.log(chalk.dim(`   📂 Worktree created: ${dirName} (in temp dir)`));
   return worktreePath;
 }
 
@@ -85,23 +88,28 @@ async function captureWorktreeDiff(worktreePath) {
     await shell("git add -A", worktreePath);
     const diff = await shell("git diff --cached HEAD", worktreePath);
     return diff.trim();
-  } catch {
+  } catch (diffErr) {
+    console.log(chalk.dim(`   ⚠ Diff capture failed: ${diffErr.message}`));
     return "";
   }
 }
 
 /**
  * Remove a worktree and clean up.
+ * Handles both git worktree removal and force-cleanup on failure.
  */
 async function removeWorktree(worktreePath, baseDir) {
   try {
     await shell(`git worktree remove --force "${worktreePath}"`, baseDir);
-  } catch {
+  } catch (removeErr) {
+    console.log(chalk.dim(`   ⚠ git worktree remove failed: ${removeErr.message}, force-cleaning...`));
     // Force cleanup if git worktree remove fails
     try {
       await rm(worktreePath, { recursive: true, force: true });
       await shell("git worktree prune", baseDir);
-    } catch { /* best-effort */ }
+    } catch (cleanupErr) {
+      console.log(chalk.dim(`   ⚠ Force cleanup also failed: ${cleanupErr.message}`));
+    }
   }
 }
 
@@ -130,7 +138,9 @@ export async function runSubagent(label, description, baseDir) {
     // Run codebase indexer inside the worktree
     try {
       await executeTool("index_codebase", {});
-    } catch { /* non-fatal */ }
+    } catch (indexErr) {
+      console.log(chalk.dim(`   ⚠ Subagent [${label}] index failed (non-fatal): ${indexErr.message}`));
+    }
 
     // Run the ReAct agent — give it a generous but finite step budget per subtask
     const prefixedTask = `[SUBAGENT: ${label}]\n\n${description}\n\nYou are operating in an isolated workspace. Make all necessary changes to complete this subtask.`;
@@ -161,6 +171,7 @@ export async function runSubagent(label, description, baseDir) {
 
 /**
  * Run multiple subagents in parallel (up to semaphore cap).
+ * After all subagents complete, cleans up the temp worktree directory.
  *
  * @param {Array<{label, description}>} subtasks
  * @param {string} baseDir
@@ -173,5 +184,24 @@ export async function runSubagentsParallel(subtasks, baseDir) {
   );
   const passed = results.filter(r => r.success).length;
   console.log(chalk.cyan.bold(`\n🔷 All subagents complete: ${passed}/${results.length} succeeded`));
+
+  // Auto-cleanup: prune temp worktree directory if empty
+  const tempDir = getWorktreeTempDir(baseDir);
+  if (existsSync(tempDir)) {
+    try {
+      await rm(tempDir, { recursive: true, force: true });
+      console.log(chalk.dim(`   🧹 Cleaned up temp worktree directory`));
+    } catch (cleanupErr) {
+      console.log(chalk.dim(`   ⚠ Temp worktree cleanup failed: ${cleanupErr.message}`));
+    }
+  }
+
+  // Prune any orphaned worktree references
+  try {
+    await shell("git worktree prune", baseDir);
+  } catch (pruneErr) {
+    console.log(chalk.dim(`   ⚠ git worktree prune failed: ${pruneErr.message}`));
+  }
+
   return results;
 }
