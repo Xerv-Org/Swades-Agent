@@ -106,6 +106,7 @@ API_KEY=sk-or-v1-xxxx
 BASE_URL=https://openrouter.ai/api/v1
 MODEL=anthropic/claude-sonnet-4-5
 FALLBACK_MODELS=meta-llama/llama-3.3-70b-instruct,openrouter/free
+WORKDIR=/path/to/target/workspace
 ```
 
 **OpenAI:**
