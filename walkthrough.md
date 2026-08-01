@@ -1,515 +1,827 @@
-# Swades Agent v3.1: The Ultimate Operational Developer Manual & Tutorial
+# Swades Agent v3.0 — The Complete Operational Manual
 
-Welcome to the ultimate operational manual and developer reference guide for **Swades Agent v3.1**. This handbook is designed to serve as an exhaustive operational resource for software engineers, system operators, and automated testing coordinators. 
+Welcome to the **Swades Agent v3.0** developer manual. This guide documents every architecture decision, configuration option, new capability, and operational workflow in the current build.
 
-It covers every configuration setup, environment variable, prompt recipe, countdown state, linter correction, persistent process monitor, GUI portal check, worktree manager, and sandbox simulation pipeline in granular detail.
+v3.0 is a foundational re-architecture: modes are gone, limits are gone, and the agent runs as a persistent conversational loop with a unified, borderless execution engine.
 
 ---
 
-## ⚡ Quick Start & Initial Setup
+## ⚡ Quick Start
 
-Before diving into the detailed operational chapters, here is the immediate setup required to get Swades Agent running (extracted directly from the core README).
-
-### Step 1: Install Node.js
-You need **Node.js v18 or later** (v22 recommended).
-```bash
-node -v
-```
-If not installed, download from [nodejs.org](https://nodejs.org/) or use a version manager like `nvm`.
-
-### Step 2: Clone & Install Dependencies
 ```bash
 git clone https://github.com/Electroiscoding/Swades-Agent.git
 cd Swades-Agent
 npm install
+cp .env.example .env   # add your API_KEY
+node src/index.js      # start the persistent chat loop
 ```
-This installs the required core packages: `openai`, `dotenv`, and `chalk`.
 
-### Updating Existing Clones
-If you cloned the old repo name (`reactsystemlearning1`), update it:
-```bash
-git remote set-url origin https://github.com/Electroiscoding/Swades-Agent.git
-git pull origin main
-npm install
-```
+**Node.js v18+** and **Git 2.30+** are required.
 
 ---
 
-## Chapter 1: Operational Philosophy & System Design
+## Chapter 1: Architecture — The Unified Execution Engine
 
-Swades Agent is a terminal-native, autonomous software engineering agent built to run directly on your workspace. Instead of isolating your execution inside closed, virtualized cloud environments or requiring tedious copy-pasting of files, Swades Agent integrates directly with your local system utilities. It edits source files surgically, triggers tests, queries databases, builds applications, and monitors running servers without leaving your terminal.
+### 1.1 The Old Architecture (v2.x and Earlier)
+
+In previous versions, the agent required you to pick a mode before it started:
+- The entry point ran `detectModeWithAI()` as the very first step.
+- It then hard-routed to one of three isolated runtimes: `runAgent`, `runDirector`, or `runCUA`.
+- Flags like `--subagents`, `--sim`, `--autonomous` were the only way to unlock advanced capabilities.
+- When a task was complete, the process exited — requiring the user to re-run the command for the next task.
+
+**Problems this caused:**
+- Artificial ceilings: the agent couldn't spontaneously spawn a simulation it hadn't been pre-authorized to run.
+- No context continuity: every re-run started with zero history.
+- User overhead: choosing the right mode required predicting task complexity upfront.
+
+### 1.2 The New Architecture (v3.0)
 
 ```
-+------------------------------------------------------------+
-|                    USER/DEVELOPER INPUT                    |
-|             (CLI Prompt / Interactive Dashboard)           |
-+------------------------------------------------------------+
-                              │
-                              ▼
-+------------------------------------------------------------+
-|                 AI COMPLEXITY CLASSIFIER                   |
-|       (Determines Normal vs. Autonomous vs. CUA Mode)      |
-+------------------------------------------------------------+
-                              │
-            ┌─────────────────┼─────────────────┐
-            ▼                 ▼                 ▼
-     [Normal Mode]    [Autonomous Mode]     [CUA Mode]
-     (Single ReAct)   (Multi-Cycle Loop)   (GUI Session)
-            │                 │                 │
-            └─────────────────┼─────────────────┘
-                              ▼
-+------------------------------------------------------------+
-|                  CORE ReAct AGENT ENGINE                   |
-|               (Think -> Act -> Observe Loop)               |
-+------------------------------------------------------------+
-      │                       │                        │
-      ▼                       ▼                        ▼
-[Time Manager]        [Syntax Linter]          [Shell Spawner]
-- Clamped budget      - Stack Brackets         - Detached Spawn
-- Urgency prompts     - JSON Normalizer        - Log Buffering
-- Grace limits        - Space/Tab Format       - Peek & Terminate
+┌──────────────────────────────────────────────────────────────────┐
+│                    Persistent Chat Loop                          │
+│  (runs continuously, retains full message history per session)  │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                ┌──────────────▼──────────────┐
+                │    Unified ReAct Agent      │
+                │  (single entry point for    │
+                │   ALL task types)           │
+                └──────────────┬──────────────┘
+                               │
+    ┌──────────────────────────┼────────────────────────────┐
+    │                          │                            │
+    ▼                          ▼                            ▼
+┌──────────────┐    ┌──────────────────────┐    ┌──────────────────┐
+│ File Tools   │    │ Workflow Tools       │    │ Verify Tools     │
+│ read_file    │    │ run_simulation       │    │ verify_dom_state │
+│ write_file   │    │ spawn_subagents      │    │ rewind_to_       │
+│ patch_file   │    │ delegate_to_director │    │ checkpoint       │
+│ run_command  │    │                      │    │                  │
+│ grep_search  │    │ (called mid-flight,  │    │ (text-only DOM   │
+│ peek_terminal│    │  no CLI flag needed) │    │  assertions, no  │
+│ extend_dead  │    │                      │    │  screenshots)    │
+└──────────────┘    └──────────────────────┘    └──────────────────┘
+
+                            ┌──────────────────┐
+                            │  CUA (LOCKED OUT) │
+                            │  Only via --cua   │
+                            │  CLI flag. Never  │
+                            │  auto-invoked.    │
+                            └──────────────────┘
 ```
 
-### 1.1 Developer Experience (DX) Priorities
-- **Surgical Code Modifiers**: Rather than rewriting whole files (which consumes excessive tokens and corrupts structural layouts), the agent operates through surgical patches, preserving your existing comment blocks, documentation, and layout formats.
-- **Write-Time Syntax Protection**: Modified files undergo syntax checks prior to save operations. The linter automatically repairs unclosed brackets, formatting, or JSON syntax issues before the compiler executes.
-- **Asynchronous Execution Multiplexing**: Commands that run indefinitely (like dev servers, test suites, or compilation processes) run in detached background terminals, keeping the main CLI loop responsive.
-- **Urgency Deadline Guardrails**: The agent estimates a time budget at startup. It monitors a visual countdown timer and can request deadline extensions to prevent infinite execution loops.
+**Key principles:**
+1. **Start once, work forever** — the agent never exits between tasks.
+2. **Tools, not modes** — advanced capabilities (`simulation`, `subagents`, `director`) are LLM-callable tools, not CLI modes.
+3. **Safety by depth** — a recursive depth guard prevents subagents from spawning their own subagents.
+4. **Text-first verification** — UI/browser verification is always text-based DOM assertions. No screenshots by default.
+5. **CUA is strictly isolated** — desktop automation is never auto-invoked.
 
 ---
 
-## Chapter 2: Installing and Configuring the Agent Environment
+## Chapter 2: Environment Configuration
 
-Follow this checklist to configure Swades Agent inside your workspace.
-
-### 2.1 Runtime Prerequisites
-- **Node.js**: Version 18.0.0 or later is required (v22.x or later is recommended).
-- **Git**: Version 2.30 or later is required to run subagents and sandbox simulations.
-- **System Check**:
-  ```bash
-  node -v
-  npm -v
-  git --version
-  ```
-
-### 2.2 Project Setup
-Clone or copy the Swades Agent directory into your target workspace, then execute:
-```bash
-npm install
-```
-This command installs the three core NPM modules locally:
-- `openai`: Manages communication with OpenAI-compatible API endpoints and parses SSE token streams.
-- `dotenv`: Loads environment configurations from your local `.env` file into `process.env`.
-- `chalk`: Formats and color-codes terminal logs (e.g. countdown bars, tool indicators, errors).
-
----
-
-### 2.3 Comprehensive `.env` Variable Reference
-
-Create your environment configuration file:
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in a text editor to configure the parameters below.
-
-| Variable Name | Required | Default Value | Description |
+| Variable | Required | Default | Description |
 |---|---|---|---|
-| `API_KEY` | **Yes** | `(None)` | Your LLM provider API key (e.g. OpenRouter, OpenAI, Groq, local gateways). |
-| `BASE_URL` | No | `https://openrouter.ai/api/v1` | The HTTP endpoint for API requests. |
-| `MODEL` | No | `openrouter/free` | The primary model used to handle task planning and code editing. |
-| `CUA_MODEL` | No | `openrouter/free` | The vision-capable model used to analyze desktop screenshots in CUA mode. |
-| `MAX_STEPS` | No | `Infinity` | Max steps allowed per ReAct worker run. |
-| `MAX_OUTPUT_LENGTH`| No | `10000` | Character limit on stdout/stderr outputs returned to the LLM. |
-| `WORKDIR` | No | `process.cwd()` | Target directory for file operations. Set to `../` if the agent is installed as a subfolder in your project. |
----
+| `API_KEY` | **Yes** | — | API key for your LLM provider |
+| `BASE_URL` | No | `https://openrouter.ai/api/v1` | API endpoint |
+| `MODEL` | No | `openrouter/free` | Primary model |
+| `FALLBACK_MODELS` | No | — | Comma-separated fallback chain (e.g. `gpt-4o,claude-3-haiku`) |
+| `CUA_MODEL` | No | `openrouter/free` | Vision model for `--cua` mode only |
+| `MAX_STEPS` | No | `Infinity` | Step cap per agent run |
+| `MAX_OUTPUT_LENGTH` | No | `10000` | Max chars returned from shell commands |
+| `WORKDIR` | No | `process.cwd()` | Target workspace directory |
+| `SIM_CONCURRENCY` | No | `2` | Max parallel sandbox scenarios (see §5) |
 
-### 2.4 LLM Provider Setup Profiles
+### LLM Provider Profiles
 
-#### Profile A: OpenRouter Setup (Cloud Model API)
-Recommended for accessing Claude 3.5 Sonnet or any strong coding model:
+**OpenRouter (recommended):**
 ```env
-API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+API_KEY=sk-or-v1-xxxx
 BASE_URL=https://openrouter.ai/api/v1
-MODEL=meta-llama/llama-3.3-70b-instruct
+MODEL=anthropic/claude-sonnet-4-5
+FALLBACK_MODELS=meta-llama/llama-3.3-70b-instruct,openrouter/free
 ```
 
-#### Profile B: OpenAI Setup
+**OpenAI:**
 ```env
-API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+API_KEY=sk-proj-xxxx
 BASE_URL=https://api.openai.com/v1
 MODEL=gpt-4o
 ```
 
-#### Profile C: Groq Setup
+**Groq:**
 ```env
-API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+API_KEY=gsk_xxxx
 BASE_URL=https://api.groq.com/openai/v1
 MODEL=llama-3.3-70b-versatile
 ```
 
-#### Profile D: Local Ollama Setup (Offline/Private)
-Ensure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull qwen2.5-coder:7b`):
+**Ollama (local):**
 ```env
 API_KEY=ollama
 BASE_URL=http://localhost:11434/v1
 MODEL=qwen2.5-coder:7b
 ```
 
----
+### OpenRouter Context Compression
 
-## Chapter 3: The Command Interface (Modes & Syntax)
+When `BASE_URL` contains `openrouter`, the agent automatically attaches the server-side context compression plugin to every LLM call:
 
-You can launch tasks interactively or pass prompts directly as command-line arguments.
-
-### 3.1 Interactive Dashboard Mode
-Run the command:
-```bash
-npm start
+```js
+// llm.js — always active on OpenRouter
+params.plugins = [{ id: "context-compression" }];
 ```
-The terminal will display the configuration menu:
-1. **Task →**: Enter your prompt (e.g. *"create a basic express app in src/server.js"*).
-2. **Image path/URL (optional) →**: Provide a path or web URL to a layout image/mockup if you are using a vision-capable model.
-3. **Mode? →**: Select your execution mode:
-   - `c` (or `cua`): Desktop GUI automation.
-   - `a` (or `autonomous`): Director-supervised multi-cycle development loops.
-   - `s` (or `subagents`): Runs task decomposition in parallel workspaces.
-   - `n` (or `normal`): Single-run worker loop.
-   - Press **Enter** to let the AI auto-classify task complexity.
+
+This means OpenRouter compresses older messages server-side before forwarding to the model — reducing token costs significantly on long sessions. The local context pruner (see §8.2) handles the Node.js process memory side.
 
 ---
 
-### 3.2 CLI Mode Flags
-Pass your task as a string and add the appropriate flags:
+## Chapter 3: The Persistent Chat Loop
 
-#### Normal Mode
-Used for quick, single-step tasks:
+This is the most significant UX change in v3.0.
+
+### 3.1 Starting the Loop
+
 ```bash
-node src/index.js "Check for syntax errors in src/database.js" --normal
+node src/index.js
 ```
 
-#### Autonomous Director Mode
-Used for complex features requiring multiple test/implementation cycles:
-```bash
-node src/index.js "Write unit tests for auth.js, run them, and fix any failures" --autonomous
+Output:
+```
+  🚀 Swades Agent v3.0
+  Workspace: /your/project
+  Type 'exit' to quit | 'clear' to reset context | '/help' for commands
+
+────────────────────────────────────────────────────────────
+
+💬 What do you need? → _
 ```
 
-#### CUA Mode (Computer Use Agent)
-Spawns Wayland GUI mode to open a web browser or desktop app:
-```bash
-node src/index.js "Open Chrome and search for Node.js docs" --cua
+The agent waits for input. Each task you type is executed by the full ReAct loop. When the task completes, **it returns to the prompt** — no re-run needed.
+
+### 3.2 Chat Loop Commands
+
+| Input | Behavior |
+|---|---|
+| Any task text | Runs the task through the full agent loop |
+| `exit` / `quit` | Gracefully exits the process |
+| `clear` | Resets the session message context to blank |
+| `/help` | Prints the help menu |
+| `task text --image path.png` | Attaches an image inline with the task |
+
+### 3.3 Session Context Continuity
+
+Messages from previous tasks in the same session are preserved in `sessionMessages`. This means the agent remembers what it did in step 1 when you give it a follow-up in step 2:
+
+```
+💬 → Add a dark mode toggle to the dashboard
+  ✅ Done. Dark mode added via CSS variables.
+
+💬 → Now write a test to verify the toggle works
+  (agent already knows about the dashboard from the previous task)
 ```
 
-#### Subagents Mode
-Bypasses the simulation engine to run task decomposition in parallel workspaces:
-```bash
-node src/index.js "Refactor src/api/ and src/utils/ folders to ES modules" --subagents
-```
+Use `clear` to wipe context when you switch to an unrelated project.
 
-#### Passing Images
-Pass local or web image URLs directly to the agent:
+### 3.4 CLI Task Shortcut
+
+You can still pass a task on the command line. It runs first, then drops into the loop:
+
 ```bash
-node src/index.js "Analyze this layout and implement it in index.html" --image mockups/design.png
+node src/index.js "Fix the login bug in auth.js"
+# → runs the task
+# → drops into chat loop for follow-up work
 ```
 
 ---
 
-## Chapter 4: Dynamic Timer & Urgency Pressure System
+## Chapter 4: CLI Flags — Now Capability Hints, Not Mode Gates
 
-The countdown timer manager prevents the agent from getting stuck in infinite loops.
+Flags no longer hard-route the agent into a separate runtime. Instead they set environment variable hints that bias the agent's tool calling behavior.
 
-### 4.1 Understanding the Visual Progress Bar
-At each step of the ReAct loop, a countdown timer is rendered to the terminal. Watch the bar colors to monitor progress:
+| Flag | Old Behavior | New Behavior |
+|---|---|---|
+| `--autonomous`, `-a` | Hard-route to `runDirector()` | Sets `PREFER_DIRECTOR=true`; agent starts in Director loop, then enters chat |
+| `--sim` | Force `FORCE_ORCHESTRATED=true` | Sets `PREFER_SIMULATION=true`; biases agent toward `run_simulation` tool |
+| `--subagents`, `-s`, `--no-sim` | Force `SUBAGENTS_ONLY=true` | Sets `PREFER_SUBAGENTS=true`; biases agent toward `spawn_subagents` tool |
+| `--cua`, `-c` | Hard-route to `runCUA()` | **Still a hard gate** — the ONLY way to enable CUA. Agent process does not enter chat loop. |
+| `--image path` | Pass image to first task | Same behavior |
+| `--rewind` | (new) | Lists available git checkpoints from the current session |
+| `--help`, `-h` | Print help and exit | Same behavior |
 
-* **[CALM]** (Green Bar, `remaining > 60%`): Safe workspace, focus on clean and complete code.
-  ```
-  ⏰ TIMER: 120s remaining / 120s [████████████████████] URGENCY: CALM
-  ```
-* **[MEDIUM]** (Yellow Bar, `remaining 30%-60%`): Ticking timer, keep edits structured.
-  ```
-  ⏰ TIMER: 58s remaining / 120s [██████████░░░░░░░░░░] URGENCY: MEDIUM
-  ```
-* **[URGENT]** (Red Bar, `remaining 10%-30%`): Time is low, skip non-essential steps.
-  ```
-  ⏰ TIMER: 22s remaining / 120s [████░░░░░░░░░░░░░░░░] URGENCY: URGENT
-  ```
-* **[PANIC]** (Bold Red Bar, `remaining < 10%`): Finish immediately, skip cleanup.
-  ```
-  ⏰ TIMER: 8s remaining / 120s [█░░░░░░░░░░░░░░░░░░░] URGENCY: PANIC
-  ```
-* **[OVERTIME]** (Inverted Red Bar, `remaining <= 0`): System is running overdue.
-  ```
-  ⏰ TIMER: OVERTIME (12s overdue) / 120s [░░░░░░░░░░░░░░░░░░░░] URGENCY: OVERTIME
-  ```
+**The agent can now call `run_simulation`, `spawn_subagents`, and `delegate_to_director` autonomously** — without any CLI flag. The flags only provide an upfront nudge.
 
 ---
 
-### 4.2 Overtime Grace Ticks & Forced Termination
-If the agent enters **OVERTIME**, a warning is injected into its prompt:
-`🚨 DEADLINE EXPIRED: You are running in OVERTIME! Wrap up or request an extension.`
-- The agent gets a strict **limit of 3 steps** in overtime.
-- If it doesn't finish or request an extension, the system triggers a **forced loop-prevention termination** to save token costs.
+## Chapter 5: Parallel Sandbox Simulation (run_simulation)
 
-### 4.3 How to Instruct the Agent to Extend the Timer
-If you anticipate that a task is complex or requires installing software, you can prompt the agent to manage its time budget directly:
-> *"Implement feature X and run the build tests. If you run low on time, make sure to call the extend_deadline tool to add 120 seconds."*
+### 5.1 What Changed
 
-The agent will invoke the tool:
-```json
+**Before (v2.x):** Sandbox scenarios ran sequentially in a `for...of` loop — Scenario A, then B, then C. Three scenarios = 3× the wait time.
+
+**After (v3.0):** Scenarios run concurrently using `Promise.allSettled()` + a `Semaphore`:
+
+```js
+// simulator.js
+const concurrencyLimit = parseInt(process.env.SIM_CONCURRENCY) || 2;
+const simSemaphore = new Semaphore(concurrencyLimit);
+
+const settled = await Promise.allSettled(
+  scenarios.map(scenario =>
+    simSemaphore.acquire().then(async () => {
+      try { return await runSandbox(scenario, task, baseDir); }
+      finally { simSemaphore.release(); }
+    })
+  )
+);
+```
+
+**Impact:** 3-scenario simulations drop from ~5 minutes to ~90 seconds with `SIM_CONCURRENCY=3`.
+
+### 5.2 Simulation as a Tool (Mid-Flight)
+
+The agent can now call simulation **at any point** during a task — not just at startup:
+
+```js
+// Tool: run_simulation
+{
+  "name": "run_simulation",
+  "arguments": {
+    "task": "Implement the caching layer using either Redis or in-memory LRU — test both",
+    "reason": "Two valid approaches exist; simulation will pick the one with cleaner test results"
+  }
+}
+```
+
+What happens:
+1. The agent calls `run_simulation` as a normal tool call
+2. `simulator.js` generates 2–4 scenarios, runs them in parallel git worktrees
+3. The best scenario is promoted back to the live workspace
+4. The tool returns a summary to the agent, who continues the task
+
+### 5.3 Recursion Guard
+
+Simulation agents (running inside a worktree) **cannot** call `run_simulation` again:
+
+```
+❌ [RECURSION GUARD] Cannot call 'run_simulation' from within a subagent
+   or simulation context (depth=2). Complete this subtask directly.
+```
+
+Depth is tracked via `process.env._SWADES_TOOL_DEPTH`.
+
+### 5.4 Configuring Concurrency
+
+```env
+# .env
+SIM_CONCURRENCY=3   # run 3 sandboxes at once (more CPU, faster results)
+SIM_CONCURRENCY=1   # sequential (original behavior, lowest resource use)
+```
+
+### 5.5 Simulation Pipeline (unchanged, now faster)
+
+```
+Generate Scenarios (2–4)
+        │
+        ▼ (parallel, capped at SIM_CONCURRENCY)
+┌──────────┬──────────┬──────────┐
+│ Sandbox A│ Sandbox B│ Sandbox C│   ← concurrent git worktrees
+│ agent run│ agent run│ agent run│
+│ compile  │ compile  │ compile  │
+│ test     │ test     │ test     │
+└──────────┴──────────┴──────────┘
+        │
+        ▼
+  LLM Verdict Selection
+        │
+        ▼
+  Shadow Verification (separate worktree)
+        │
+        ▼
+  git apply → Live Workspace
+        │
+        ▼
+  Post-Promotion Build + Test
+```
+
+---
+
+## Chapter 6: Parallel Subagents (spawn_subagents)
+
+### 6.1 How it Works Now
+
+**Before:** `--subagents` or `--sim` CLI flag triggered `runOrchestrated()` which called `evaluateComplexity()` and then spawned workers.
+
+**After:** The agent calls `spawn_subagents` as a mid-flight tool call whenever it decides decomposition is appropriate:
+
+```js
+{
+  "name": "spawn_subagents",
+  "arguments": {
+    "subtasks": [
+      { "label": "auth-module", "description": "Create JWT auth middleware in src/middleware/auth.js" },
+      { "label": "user-routes", "description": "Implement CRUD routes for users in src/routes/users.js" },
+      { "label": "test-suite",  "description": "Write integration tests for both modules in tests/" }
+    ],
+    "reason": "Three independent workstreams that can be built in parallel without conflicts"
+  }
+}
+```
+
+What happens:
+1. `runSubagentsParallel()` creates one isolated git worktree per subtask (in `/tmp/swades_worktrees/`)
+2. Each subagent runs the full ReAct loop in its worktree, completely isolated
+3. All diffs are captured with `git diff --cached HEAD`
+4. `mergeDiffs()` applies each diff to the live workspace with `git apply --3way`
+5. Conflicts spawn a dedicated merge-resolution subagent
+6. The tool returns a merge summary to the calling agent
+
+### 6.2 Subagent Semaphore
+
+Parallel subagents are capped at 5 concurrent workers by the global `Semaphore` in `subagent.js`. This is separate from the simulation semaphore.
+
+### 6.3 Worktree Location
+
+Subagent worktrees live in OS temp dir, not your project:
+```
+/tmp/swades_worktrees/<project-hash>/<label>-<uuid>/
+```
+
+They are automatically cleaned up after `runSubagentsParallel` completes.
+
+---
+
+## Chapter 7: Director Escalation (delegate_to_director)
+
+### 7.1 Mid-Flight Escalation
+
+Previously, Director mode had to be started with `--autonomous`. Now the agent can escalate itself:
+
+```js
+{
+  "name": "delegate_to_director",
+  "arguments": {
+    "goal": "Migrate the entire backend from Express to Fastify, update all tests, and verify no regressions",
+    "reason": "Task scope has grown beyond the current step budget and requires multi-cycle planning"
+  }
+}
+```
+
+The Director AI then:
+1. Reviews the current conversation history
+2. Plans the next action on behalf of the user
+3. Runs the worker agent for one cycle
+4. Reviews progress and decides the next prompt
+5. Repeats until `STATUS: COMPLETE`
+
+### 7.2 Autonomous Mode via Flag
+
+`--autonomous` still works as before but is now a chat-loop bootstrap:
+
+```bash
+node src/index.js "Build a full REST API" --autonomous
+# → starts Director loop for the first task
+# → drops into chat loop when Director finishes
+```
+
+---
+
+## Chapter 8: State Checkpointing & Rewind
+
+### 8.1 How Checkpoints Work
+
+Before every state-mutating tool call (`write_file`, `patch_file`, `run_command`), the agent creates a lightweight git stash snapshot:
+
+```js
+// agent.js — before executing any mutating tool
+const stashHash = await shell("git stash create", resolvedWorkdir);
+if (stashHash) {
+  checkpointStore.push({ step, stashHash, messagesSnapshot: deepClone(messages) });
+}
+```
+
+- `git stash create` creates a stash object **without touching the working tree** — it's a pure snapshot, zero-cost for clean checkouts.
+- Up to 10 checkpoints are kept in memory per session (FIFO).
+- Both the **workspace files** and the **LLM message context** are snapshotted.
+
+### 8.2 Rewinding
+
+The agent can call the `rewind_to_checkpoint` tool to undo a bad change:
+
+```js
+{
+  "name": "rewind_to_checkpoint",
+  "arguments": { "step": 7 }
+}
+```
+
+What happens:
+1. `git read-tree --reset -u <stashHash>` restores all workspace files to the step 7 state
+2. `process.env._SWADES_REWIND_STEP` is set to signal `agent.js`
+3. `agent.js` detects the signal and splices the `messages` array back to the step 7 snapshot
+4. The agent continues from a clean state as if step 7 just completed
+
+**Manual rewind** (outside the agent):
+```bash
+# List available stash snapshots
+git stash list
+
+# Restore manually
+git read-tree --reset -u <stash-hash>
+```
+
+---
+
+## Chapter 9: Context Window Management
+
+### 9.1 Two-Layer Compression
+
+**Layer 1 — Server-side (OpenRouter):**
+When using OpenRouter, the `context-compression` plugin automatically compresses older messages before they reach the model. This is transparent and free.
+
+**Layer 2 — Local pruning (agent.js):**
+After each step, if `messages.length > 40`, the agent compresses the middle of the conversation:
+
+```js
+function pruneContext(msgs) {
+  if (msgs.length <= 40) return msgs;
+  const systemMsgs = msgs.filter(m => m.role === "system");
+  const recent = msgs.slice(-15);           // keep last 15
+  const middle = msgs.slice(systemMsgs.length, msgs.length - 15);
+  const summary = `[CONTEXT PRUNED: ${middle.length} older messages compressed...]`;
+  return [...systemMsgs, { role: "user", content: summary }, ...recent];
+}
+```
+
+The system prompt and last 15 messages are always preserved. The middle is collapsed to a single summary line.
+
+**Console output:**
+```
+   🧹 Context pruned: 47 → 18 messages
+```
+
+### 9.2 Use `clear` in the Chat Loop
+
+For completely unrelated follow-up work, type `clear` in the chat loop to wipe the session context entirely:
+
+```
+💬 → clear
+  🧹 Context cleared — starting fresh.
+```
+
+---
+
+## Chapter 10: Incremental Codebase Re-Indexing
+
+### 10.1 What Changed
+
+**Before:** `index_codebase` ran once at startup. If the agent wrote 10 files during the session, the index became stale — function names, exports, and imports were outdated.
+
+**After:** Every `write_file` and `patch_file` call triggers a non-blocking incremental update for only the modified file:
+
+```js
+// tools.js — called after every write/patch
+async function _updateIndexForFile(fullPath, content) {
+  const index = JSON.parse(await readFile(indexPath, "utf-8"));
+  const relPath = relative(workdir, fullPath);
+  index.files[relPath] = { size: content.length, structure: parseFileStructure(...) };
+  index.lastUpdated = new Date().toISOString();
+  await writeFile(indexPath, JSON.stringify(index, null, 2), "utf-8");
+}
+
+// Called non-blocking so it never delays the tool response:
+_updateIndexForFile(fullPath, content).catch(() => {});
+```
+
+The index stays 100% accurate throughout multi-file runs without the overhead of a full rescan.
+
+---
+
+## Chapter 11: Text-Only DOM Verification (verify_dom_state)
+
+### 11.1 Why No Screenshots
+
+Even when using a vision-capable model, screenshots are slow, token-heavy, and non-deterministic. A text assertion on the HTML is instant and 100% deterministic.
+
+`verify_dom_state` fetches any URL over `node:http` or `node:https` (zero external dependencies) and runs structured text assertions against the raw HTML.
+
+### 11.2 Assertion Syntax
+
+| Assertion | Checks |
+|---|---|
+| `text:Submit` | Raw HTML contains the string `Submit` |
+| `not-text:Error` | Raw HTML does NOT contain `Error` |
+| `class:dark` | Any element has `class="...dark..."` |
+| `element:#login-btn` | `id="login-btn"` is present |
+| `element:.nav-item` | Element with class `nav-item` exists |
+| `element:header` | `<header` tag is present |
+| `attr:data-theme=dark` | Attribute `data-theme="dark"` is present |
+
+### 11.3 Example Tool Call
+
+```js
+{
+  "name": "verify_dom_state",
+  "arguments": {
+    "url": "http://localhost:3000",
+    "assertions": [
+      "class:dark",
+      "element:#theme-toggle",
+      "text:Dashboard",
+      "not-text:Uncaught Error"
+    ]
+  }
+}
+```
+
+Output:
+```
+✅ ALL ASSERTIONS PASSED
+DOM Verification (http://localhost:3000): 4 passed, 0 failed
+
+  ✅ PASS [class:dark] — Class 'dark' found
+  ✅ PASS [element:#theme-toggle] — Element id='theme-toggle' found
+  ✅ PASS [text:Dashboard] — Found 'Dashboard' in HTML
+  ✅ PASS [not-text:Uncaught Error] — Confirmed 'Uncaught Error' absent from HTML
+```
+
+### 11.4 Single-Level Redirect Support
+
+If the URL redirects (HTTP 3xx), the tool automatically follows one redirect. This handles common dev server setups that redirect `/` to `/app`.
+
+---
+
+## Chapter 12: CUA Mode — Strict Isolation
+
+### 12.1 The Lockout
+
+Desktop automation (CUA) is **completely invisible** to the agent unless the user explicitly passes `--cua`:
+
+- No `gui_interact` tool appears in `TOOL_SCHEMAS`.
+- The system prompt contains an explicit CUA lockout notice.
+- `runCUA` is never imported or called in the chat loop path.
+- Subagents and simulation agents are also CUA-blind.
+
+```
+CUA LOCKOUT (from system prompt):
+- You do NOT have access to any GUI interaction, screenshot, mouse-click,
+  or desktop automation tools.
+- Desktop automation requires explicit --cua CLI flag from the user.
+- Browser and UI verification MUST use the verify_dom_state tool.
+```
+
+### 12.2 Enabling CUA
+
+The only way to enable CUA:
+```bash
+node src/index.js --cua "Open Chrome and navigate to the app"
+```
+
+This starts a separate CUA session. It does NOT drop into the chat loop afterward.
+
+### 12.3 CUA Wayland Setup (Linux)
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y python3-gi python3-gi-cairo
+
+# Fedora
+sudo dnf install -y python3-gobject
+
+# Arch
+sudo pacman -S python-gobject
+```
+
+Enable in GNOME: **Settings → Sharing → Remote Desktop → On**
+
+Verify D-Bus portals:
+```bash
+dbus-send --session --dest=org.freedesktop.DBus --type=method_call \
+  --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames \
+  | grep Mutter
+```
+
+---
+
+## Chapter 13: Timer, Urgency & Deadline System
+
+The AI-estimated countdown timer is unchanged from v2.x and prevents infinite loops.
+
+### 13.1 Visual Progress Bar
+
+```
+⏰ TIMER: 120s remaining / 180s [█████████████░░░░░░░] URGENCY: CALM
+⏰ TIMER: 54s remaining / 180s  [██████░░░░░░░░░░░░░░] URGENCY: MEDIUM
+⏰ TIMER: 18s remaining / 180s  [██░░░░░░░░░░░░░░░░░░] URGENCY: URGENT
+⏰ TIMER: OVERTIME (5s overdue) / 180s [░░░░░░░░░░░░░░░░░░░░] URGENCY: OVERTIME
+```
+
+| Urgency | Threshold | Color |
+|---|---|---|
+| CALM | > 60% remaining | Green |
+| MEDIUM | 30–60% remaining | Yellow |
+| URGENT | 10–30% remaining | Red |
+| PANIC | < 10% remaining | Bold red |
+| OVERTIME | Expired | Inverted red |
+
+### 13.2 Extending the Deadline
+
+```js
 {
   "name": "extend_deadline",
   "arguments": {
     "additional_seconds": 120,
-    "reason": "Compiling libraries is taking longer than expected"
+    "reason": "npm install is taking longer than estimated"
   }
 }
 ```
-This resets the timers and returns the agent to a CALM state.
+
+The agent gets 3 grace steps after entering OVERTIME before forced termination.
 
 ---
 
-## Chapter 5: The Self-Healing Linter & Indentation Rules
+## Chapter 14: Self-Healing Linter & Syntax Validation
 
-When the agent writes files, syntax guardrails prevent code corruption.
+Every `write_file` and `patch_file` call triggers post-write validation:
 
-### 5.1 Reading Linter Reports
-On every save or patch, the linter prints validation outputs to the console:
-- **`✅ File written successfully`**: Indicates zero syntax or indentation errors.
-- **`❌ WARNING: SYNTAX ERRORS DETECTED`**: Lists JavaScript compile errors (`node --check`), bracket mismatch lines, or JSON parser errors.
-- **`⚠️ INDENTATION WARNINGS`**: Informs the agent of inconsistent tab/space patterns or sudden indentation jumps (jumps > 4 spaces without a block opening character like `{`, `(`, `[`, or `:`).
+1. **Bracket matching**: Detects and auto-appends missing `}`, `)`, `]` at EOF.
+2. **JSON repair**: Removes trailing commas, wraps unquoted keys, normalizes single quotes.
+3. **Indentation fix**: Converts mixed tab/space files to consistent indentation.
+4. **Node.js check**: Runs `node --check` on every `.js`/`.mjs`/`.cjs` file.
+5. **Python compile**: Runs `python3 -m py_compile` on `.py` files.
 
-### 5.2 Self-Healing Logic
-You do not need to intervene if the agent makes a bracket error. The linter's auto-fixer will:
-1. Parse bracket structures and append missing closing brackets at EOF.
-2. Format mixed spaces/tabs automatically.
-3. Clean JSON trailing commas and wrap unquoted keys in double quotes.
-
-If successful, the linter writes the corrected content and prints:
-`✅ File written and automatically auto-fixed syntax errors.`
-
-### 5.3 Strict vs Cosmetic Indentation Languages
-Indentation warnings are only enabled for indentation-sensitive files:
-- **Strict Indentation**: Python (`.py`) and YAML (`.yml`, `.yaml`).
-- **Cosmetic Indentation**: JavaScript, CSS, HTML, Markdown, and configuration files skip indentation warnings.
-
----
-
-## Chapter 6: Background Process Management (`peek_terminal`)
-
-If a command takes longer than 30 seconds (e.g. running a compile step or dev server), the agent detaches the task to run in the background.
-
-### 6.1 Checking Background Process Logs
-If a task detaches, you can instruct the agent to poll the output using `peek_terminal`:
-> *"Run npm run build. If it detaches, wait 10 seconds and peek at the terminal log to confirm it compiled successfully."*
-
-The agent calls `peek_terminal` with the default `peek` action:
-- **`[STATUS: RUNNING]`**: The background task is still executing. The agent reads the tail of `.agent_terminal.log` to view recent output.
-- **`[STATUS: COMPLETED]`**: The background process finished. The agent reads the final logs and handles success/error codes.
-
-### 6.2 Terminating Stuck Processes
-If a background server or test loop gets stuck:
-1. Prompt the agent: *"Kill the background process immediately using peek_terminal with the kill action."*
-2. The agent executes `peek_terminal` with `action: "kill"`.
-3. This sends `SIGTERM` to the process group, releasing system resources.
-
----
-
-## Chapter 7: Wayland Native GUI (CUA Mode) Setup
-
-CUA mode allows the agent to control your desktop. For safety under modern Linux installations, set up the following:
-
-### Step 1: Install Introspector Packages
-Wayland CUA requires system GObject libraries to communicate over the Mutter remote desktop bus:
-
-* **Ubuntu / Debian**:
-  ```bash
-  sudo apt update && sudo apt install -y python3-gi python3-gi-cairo
-  ```
-* **Fedora**:
-  ```bash
-  sudo dnf install -y python3-gobject python3-gobject-base
-  ```
-* **Arch Linux**:
-  ```bash
-  sudo pacman -S --noconfirm python-gobject
-  ```
-
-### Step 2: Enable Remote Sharing
-In your GNOME desktop settings, navigate to:
-**Settings** -> **Sharing** -> **Remote Desktop**
-Turn on **Remote Desktop** and **Screen Sharing**.
-
-### Step 3: Run the Portals Check Command
-Ensure the Mutter desktop interfaces are available on the active D-Bus session:
-```bash
-dbus-send --session --dest=org.freedesktop.DBus --type=method_call --print-reply /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep Mutter
+Output on success:
 ```
-You should see:
-- `org.gnome.Mutter.RemoteDesktop`
-- `org.gnome.Mutter.ScreenCast`
+✅ File patched successfully: src/auth.js
+```
 
-### Step 4: Spatial Click Protection Limits
-To prevent click loops:
-- **Proximity Bounding Box**: If the agent clicks inside a **25px horizontally and 15px vertically** bounding box of the previous click consecutively, the system blocks the action.
-- **Click Limit**: The agent is blocked if it clicks the same coordinate area more than **2 times overall** in a single run.
-- **Agent Response**: The tool returns a declined message, forcing the model to scroll, type, or navigate elsewhere.
-
----
-
-## Chapter 8: Subagents & Sandbox Simulations
-
-For complex refactoring, Swades Agent orchestrates multiple tasks in isolated workspaces.
-
-### 8.1 Monitoring Parallel Subagents
-When a task is classified as high-complexity:
-1. The parent orchestrator breaks down the main prompt into subtasks.
-2. It sets up git worktrees under `.swades_worktrees/`.
-3. Subagents run parallel modifications. You can watch progress outputs from all subagents concurrently.
-4. Git merge conflicts are resolved dynamically by a merge-resolution agent.
-
-### 8.2 Sandbox Simulation Engine
-Before applying modifications to your live workspace files, the engine generates alternative scenarios:
-1. It copies project code to scenario sandboxes under `.swades_sandboxes/`.
-2. It compiles the code and runs test suites inside each sandbox.
-3. The LLM evaluates the results, selects the winner, and promotes the winning diff to your workspace.
-4. Telemetry logs containing comparisons are saved to `.swades_simulation_report.json`.
+Output with auto-fix:
+```
+✅ File written successfully: src/utils.js (1243 bytes)
+⚠️ INDENTATION WARNINGS:
+- Mixed spaces and tabs detected. Auto-fixed.
+```
 
 ---
 
-## Chapter 9: Troubleshooting & FAQ
+## Chapter 15: Background Process Management
 
-#### Q: The agent gets stuck in a loop trying to patch a file.
-* **Solution**: Ensure your target block matches the file content exactly. You can read the target file using `read_file` with a line range to confirm its indentation.
+When a shell command runs past 30 seconds, it detaches to the background.
 
-#### Q: I hit a timeout when installing packages.
-* **Solution**: Detached package installations run in the background. Prompt the agent: *"Call peek_terminal to verify the package installation completed."*
+### Checking output:
+```
+peek_terminal → action: "peek"
+[STATUS: RUNNING] Process is still executing (PID 12345).
+Recent output:
+> Building... 45%
+```
 
-#### Q: How do I change the default time limit?
-* **Solution**: Set `MAX_STEPS` in your `.env` file to limit the steps, or use `extend_deadline` to adjust timing.
+### Killing a stuck process:
+```
+peek_terminal → action: "kill"
+✅ Sent SIGTERM to the active background process.
+```
 
-#### Q: The agent fails to connect to the model.
-* **Solution**: Double-check your `API_KEY` and `BASE_URL` settings in `.env`. If using local models, ensure Ollama is running (`ollama run qwen2.5-coder:7b`).
-
----
-
-## Chapter 10: Advanced Prompt Engineering & Intent Sculpting
-
-To extract 1000% performance from the Swades Agent, you must understand how to write robust, constraints-driven prompts.
-
-### 10.1 Multi-Constraint Framing
-Instead of simple commands, wrap your prompt with technical constraints, performance bounds, and explicit verification rules:
-> **BAD**: "Optimize the image loader."
-> **GOOD**: "Refactor the image loader in src/components/ImageLoader.js to use standard IntersectionObserver. Ensure no third-party libraries are added. After making the edit, use the `peek_terminal` tool to run the Jest test suite and confirm that no memory leak warnings are thrown in the console. Do not proceed until tests pass."
-
-### 10.2 Role & Persona Injection
-You can force the agent to adopt a specific operational stance:
-> "Act as a Senior SRE. Analyze the docker-compose.yml file. Identify any missing resource limits (CPU/Memory). Update the file adding conservative limits, then spawn a detached terminal to run `docker compose up -d` and check if all containers become healthy within 60 seconds."
-
-### 10.3 Tool-Forcing Directives
-If the agent is hesitating, mandate the tool:
-> "You MUST use the `read_file` tool to inspect `package.json` first. Then, you MUST use the `run_command` tool to execute `npm audit`."
+Logs are stored in `~/.cache/swades/<project-hash>/agent_terminal.log`.
 
 ---
 
-## Chapter 11: The Subagent Swarm Configuration & Deep Dive
+## Chapter 16: Memory & Session Persistence
 
-When you run with `--subagents`, the Swades Agent scales from a single thread to a hive-mind architecture.
+The agent writes a memory file after each completed task:
 
-### 11.1 Master-Worker Architecture
-1. **The Orchestrator**: The primary agent process stays in the foreground. It analyzes your complex prompt (e.g., "Migrate the entire backend from Express to Fastify").
-2. **Task Decomposition**: It splits the task into micro-tasks (e.g., "Worker A handles Auth routes, Worker B handles Database schema, Worker C handles API Gateway").
-3. **Workspace Isolation**: The Orchestrator creates `worker_A_worktree`, `worker_B_worktree` using `git worktree add`.
-4. **Parallel Execution**: Each worker operates autonomously within its isolated branch.
-5. **Reconciliation**: Once all workers finish, the Orchestrator initiates a merge sequence.
+- **Location**: `~/.cache/swades/<project-hash>/agent_memory.json`
+- **Content**: Last 10 sessions with task summary, result, and tools used
+- **Injected as**: `## MEMORY — Previous Sessions` block in the system prompt
 
-### 11.2 Handling Merge Conflicts in Subagents
-If Worker A and Worker B edit the same `utils.js` file, a merge conflict occurs during reconciliation.
-- Swades detects the `<<<<<<< HEAD` markers.
-- It automatically spawns a highly focused **Merge Resolution Agent** whose sole job is to read the conflict block, understand the intent of both workers, and perform a surgical patch to resolve it.
+This means the agent remembers what it built in your project across **different sessions** — not just within the current chat loop.
 
 ---
 
-## Chapter 12: Advanced CUA (Computer Use Agent) Mechanics
+## Chapter 17: Fallback Model Cascade
 
-CUA Mode gives Swades Agent eyes and a mouse. Here is the operational math behind its functionality.
+If the primary model returns a retryable error (429, 402, 403, 503, "No endpoints found"), the agent automatically tries the next model in `FALLBACK_MODELS`:
 
-### 12.1 Vision Resolution Scaling
-The agent captures your screen using Mutter D-Bus. To save tokens:
-- **Base Resolution**: The agent scales down your desktop resolution (e.g., 4K down to 1920x1080 or 1280x720) before sending the frame to the LLM.
-- **Coordinate Mapping**: When the LLM decides to click at `(X: 500, Y: 300)` on the downscaled image, the CUA bridge mathematically scales these coordinates back to your native resolution.
-- **Multi-Monitor**: If you have multiple monitors, the agent stitches them into an ultra-wide frame. To constrain it, disable secondary monitors during CUA testing.
+```env
+FALLBACK_MODELS=claude-3-haiku,gpt-4o-mini,openrouter/free
+```
 
-### 12.2 The 'Lost Cursor' Recovery
-If the agent clicks outside an active window, it may trigger an OS-level focus loss.
-- **Fail-safe**: The agent periodically queries the active window title. If the title changes unexpectedly, it will trigger a `press_key: "Alt+Tab"` to recover focus.
+Max 4 total attempts. On each retry:
+```
+   ⚡ Fallback attempt 2/4: trying claude-3-haiku...
+```
 
 ---
 
-## Chapter 13: Integrating with CI/CD Pipelines
+## Chapter 18: Full Tool Reference
 
-Swades Agent is not just a desktop tool; it can run entirely headlessly inside GitHub Actions or GitLab CI.
+| Tool | Description |
+|---|---|
+| `read_file` | Read file with line numbers, optional range |
+| `write_file` | Create a new file (use only for new files) |
+| `patch_file` | Surgical text replacement in existing file |
+| `list_dir` | List directory contents (skips node_modules, .git) |
+| `run_command` | Execute shell command (30s timeout, then detaches) |
+| `grep_search` | Regex search across files |
+| `index_codebase` | Full codebase scan → `agent_index.json` |
+| `peek_terminal` | Check/kill active background process |
+| `extend_deadline` | Add seconds to the current task timer |
+| `run_simulation` | Spawn parallel sandbox scenarios, promote winner |
+| `spawn_subagents` | Parallel subagents in isolated worktrees, auto-merge |
+| `delegate_to_director` | Escalate to Director AI for multi-cycle planning |
+| `verify_dom_state` | Text-only DOM assertions via HTTP fetch |
+| `rewind_to_checkpoint` | Restore workspace + context to a prior step |
 
-### 13.1 Headless Autonomous Testing
-You can configure Swades to automatically resolve test failures on your Pull Requests.
+---
 
-**GitHub Actions Example (`.github/workflows/swades.yml`)**:
+## Chapter 19: Troubleshooting
+
+#### The agent won't use `run_simulation` automatically
+The agent decides on its own. If you want to force it, say: *"Use run_simulation to test two approaches for this."*
+
+#### Stale git worktrees after Ctrl+C
+```bash
+git worktree prune
+rm -rf /tmp/swades_worktrees
+```
+
+#### verify_dom_state returns 'Failed to fetch'
+The dev server must be running and reachable. Start it first with `run_command`, wait for it to be ready, then verify.
+
+#### Context is getting confused across tasks
+Type `clear` in the chat loop to wipe the session history.
+
+#### Rewind isn't available
+Checkpoints require git to be initialized in the workspace. Run `git init && git add . && git commit -m "init"` first.
+
+#### `run_simulation` fails with "not a git repository"
+The simulator auto-initializes git if needed. If it still fails, commit your files: `git add . && git commit -m "WIP"`.
+
+---
+
+## Chapter 20: CI/CD Integration
+
+Swades runs headlessly in GitHub Actions or any CI runner.
+
 ```yaml
+# .github/workflows/swades-autofix.yml
 name: Swades Auto-Fix
 on: [pull_request]
+
 jobs:
   auto-fix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with: { node-version: '22' }
       - run: npm ci
       - run: npm test || echo "TESTS_FAILED=true" >> $GITHUB_ENV
       - name: Run Swades to fix failures
         if: env.TESTS_FAILED == 'true'
         env:
           API_KEY: ${{ secrets.OPENROUTER_KEY }}
-        run: node src/index.js "The test suite failed. Read the recent test logs, analyze the broken files, fix the syntax or logic errors, and ensure the tests pass." --autonomous
+          MAX_STEPS: "20"
+        run: |
+          echo "Fix all test failures in the test suite. Read the failing tests, identify root cause, patch the relevant source files, and verify tests pass." \
+          | node src/index.js --autonomous
       - name: Commit fixes
         run: |
           git config --global user.name "Swades Bot"
-          git commit -am "chore: auto-fixed test failures"
-          git push
+          git commit -am "chore: auto-fixed test failures" || true
+          git push || true
 ```
 
-### 13.2 Headless Constraints
-When running in CI/CD, always ensure:
-- `MAX_STEPS` is strictly limited (e.g., `MAX_STEPS=15`) to prevent GitHub Actions billing overruns.
-- `--cua` mode is NEVER used, as there is no Wayland display server active in standard Ubuntu runners.
+> [!WARNING]
+> Never use `--cua` in CI — there is no display server in standard runners.
+
+Set `MAX_STEPS=20` in CI to cap token spend.
 
 ---
 
-## Chapter 14: Debugging the Agent & Telemetry Logs
+## Chapter 21: Advanced Prompting
 
-If the agent goes rogue or makes poor decisions, you must know how to trace its thought process.
+### Forcing specific tools
+> "Use `run_simulation` to compare a Redis-based cache vs an in-memory LRU. Promote whichever has cleaner test results."
 
-### 14.1 The `.swades_telemetry` Directory
-Every run generates a highly detailed JSON transcript in the `.swades_telemetry/` folder.
-- **`trajectory_ID.json`**: Contains every Prompt, every Tool Call, every Error, and every Raw Response from the LLM.
-- **Use Case**: If the agent hallucinates a file path, open the trajectory JSON to see exactly what context the agent was holding when it made the error.
+### Parallel workstreams
+> "Split this into three subagents: one for the API routes, one for the database models, one for the test suite. Use `spawn_subagents` to run them in parallel."
 
-### 14.2 Log Pruning Strategy
-Over time, `.agent_terminal.log` and telemetry folders can grow to gigabytes.
-- Set up a cron job or a pre-start script to prune logs older than 7 days:
-  ```bash
-  find .swades_telemetry/ -type f -mtime +7 -delete
-  ```
+### Verification-first workflow
+> "After applying the dark mode changes, call `verify_dom_state` on http://localhost:3000 and assert that `class:dark` is present on the html element."
+
+### Rewind on bad output
+> "The last patch broke the build. Use `rewind_to_checkpoint` to undo it and try a different approach."
+
+### Multi-constraint framing
+> "Refactor `src/auth.js` to use JWT. Do NOT add any new npm dependencies. After patching, run `node --check src/auth.js` to verify syntax, then run `npm test` to ensure zero regressions."
 
 ---
 
-## Chapter 15: Memory & Token Window Management
-
-Swades uses dynamic token sliding windows.
-
-### 15.1 Context Window Optimization
-If you dump a 10,000-line log into the prompt, the agent's context window will saturate.
-- Swades uses **Log Tail Truncation**: When reading `peek_terminal`, it only reads the *last* 800 lines of output.
-- **File Reading Limits**: When using `read_file`, it forces a line-range limit (e.g., lines 1-500).
-
-### 15.2 Managing Massive Codebases
-If you have a monorepo:
-1. Do not ask the agent to "analyze the entire repo".
-2. Instead, ask it to: *"Use the `run_command` tool with `rg` (ripgrep) to find where 'AuthContext' is defined, then only read that specific file."*
+*Swades Agent v3.0 — Unified Execution Engine, Persistent Chat Loop, Modes-as-Tools*

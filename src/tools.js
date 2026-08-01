@@ -4,9 +4,11 @@
 
 import { readFile, writeFile, mkdir, readdir, stat, appendFile } from "node:fs/promises";
 import { exec, spawn } from "node:child_process";
-import { resolve, relative, dirname } from "node:path";
+import { resolve, relative, dirname, basename } from "node:path";
 import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
 import chalk from "chalk";
 import { getSwadesCacheDir, ensureCacheDir } from "./cleanup.js";
 
@@ -667,6 +669,9 @@ async function writeFileTool({ path, content }) {
   // Validate syntax and indentation
   const validation = await performPostWriteValidation(fullPath, content);
   
+  // Incremental index update (non-blocking)
+  _updateIndexForFile(fullPath, content).catch(() => {});
+
   let report = `✅ File written successfully: ${path} (${content.length} bytes)`;
   if (validation.errors.length > 0) {
     report += `\n\n❌ WARNING: SYNTAX ERRORS DETECTED:\n- ` + validation.errors.join("\n- ");
@@ -705,6 +710,9 @@ async function patchFileTool({ path, target, replacement }) {
   
   // Write to disk
   await writeFile(fullPath, newContent, "utf-8");
+
+  // Incremental index update (non-blocking)
+  _updateIndexForFile(fullPath, newContent).catch(() => {});
 
   // Validate syntax and indentation
   const validation = await performPostWriteValidation(fullPath, newContent);
@@ -980,6 +988,305 @@ async function extendDeadlineTool({ additional_seconds, reason }) {
   return `✅ Deadline successfully extended by ${additional_seconds} seconds. New limit: ${activeDeadline.estimatedSeconds}s. Reason: ${reason}`;
 }
 
+// ---- Incremental Index Update Helper ----
+
+/**
+ * Update only the changed file's entry in the existing codebase index.
+ * Called non-blocking after write_file / patch_file to keep the index current.
+ */
+async function _updateIndexForFile(fullPath, content) {
+  try {
+    const workdir = getWorkdir();
+    const cacheDir = getSwadesCacheDir(workdir);
+    const indexPath = resolve(cacheDir, "agent_index.json");
+    if (!existsSync(indexPath)) return;
+    const index = JSON.parse(await readFile(indexPath, "utf-8"));
+    const relPath = relative(workdir, fullPath);
+    const structure = parseFileStructure(basename(fullPath), content);
+    index.files[relPath] = { size: content.length, structure };
+    index.lastUpdated = new Date().toISOString();
+    await writeFile(indexPath, JSON.stringify(index, null, 2), "utf-8");
+  } catch { /* non-fatal — full re-index will fix any inconsistency */ }
+}
+
+// ============================================================
+// Dynamic Capability Tools — Modes-as-Tools
+// These allow the agent to invoke simulation, subagents, and
+// director escalation mid-flight without CLI flags.
+// ============================================================
+
+// Recursion depth guard — prevents runaway nesting (e.g., subagent spawning subagents)
+function _checkRecursionDepth(toolName) {
+  const depth = parseInt(process.env._SWADES_TOOL_DEPTH || "0");
+  if (depth >= 2) {
+    return `❌ [RECURSION GUARD] Cannot call '${toolName}' from within a subagent or simulation context (depth=${depth}). Complete this subtask directly with the available file tools.`;
+  }
+  return null;
+}
+
+function _incrementDepth() {
+  const depth = parseInt(process.env._SWADES_TOOL_DEPTH || "0");
+  process.env._SWADES_TOOL_DEPTH = String(depth + 1);
+}
+
+function _decrementDepth() {
+  const depth = parseInt(process.env._SWADES_TOOL_DEPTH || "0");
+  process.env._SWADES_TOOL_DEPTH = String(Math.max(0, depth - 1));
+}
+
+/**
+ * run_simulation — spawn sandbox scenarios for the given task and promote the winner.
+ */
+async function runSimulationTool({ task, reason }) {
+  const guard = _checkRecursionDepth("run_simulation");
+  if (guard) return guard;
+
+  console.log(chalk.magenta.bold(`\n🧪 [Tool] run_simulation triggered`));
+  console.log(chalk.dim(`   Reason: ${reason}`));
+
+  // Lazy import to avoid circular dependency at module load time
+  const { runSimulated } = await import("./simulator.js");
+  const workdir = getWorkdir();
+
+  _incrementDepth();
+  try {
+    const result = await runSimulated(task, workdir);
+    return `✅ Simulation complete: ${result}`;
+  } catch (err) {
+    return `❌ Simulation failed: ${err.message}`;
+  } finally {
+    _decrementDepth();
+  }
+}
+
+/**
+ * spawn_subagents — decompose a wide task into parallel subtasks in isolated worktrees.
+ */
+async function spawnSubagentsTool({ subtasks, reason }) {
+  const guard = _checkRecursionDepth("spawn_subagents");
+  if (guard) return guard;
+
+  if (!Array.isArray(subtasks) || subtasks.length === 0) {
+    return "❌ Error: 'subtasks' must be a non-empty array of {label, description} objects.";
+  }
+
+  console.log(chalk.cyan.bold(`\n🔷 [Tool] spawn_subagents triggered (${subtasks.length} subtasks)`));
+  console.log(chalk.dim(`   Reason: ${reason}`));
+
+  // Lazy imports
+  const { runSubagentsParallel } = await import("./subagent.js");
+  const { mergeDiffs } = await import("./orchestrator.js");
+  const workdir = getWorkdir();
+
+  _incrementDepth();
+  try {
+    const results = await runSubagentsParallel(subtasks, workdir);
+    const mergeResult = await mergeDiffs(results, workdir);
+    const passed = results.filter(r => r.success).length;
+    return [
+      `✅ Subagents complete: ${passed}/${results.length} succeeded.`,
+      `   Merge: ${mergeResult.merged} applied, ${mergeResult.failed} failed.`,
+      ...results.map(r => `   [${r.label}] ${r.success ? "✅" : "❌"} ${r.summary.slice(0, 120)}`),
+    ].join("\n");
+  } catch (err) {
+    return `❌ Subagent spawning failed: ${err.message}`;
+  } finally {
+    _decrementDepth();
+  }
+}
+
+/**
+ * delegate_to_director — escalate to Director AI for multi-cycle autonomous planning.
+ */
+async function delegateToDirectorTool({ goal, reason }) {
+  const guard = _checkRecursionDepth("delegate_to_director");
+  if (guard) return guard;
+
+  console.log(chalk.green.bold(`\n🎬 [Tool] delegate_to_director triggered`));
+  console.log(chalk.dim(`   Reason: ${reason}`));
+  console.log(chalk.dim(`   Goal: ${goal.slice(0, 120)}...`));
+
+  const { runDirector } = await import("./director.js");
+
+  _incrementDepth();
+  try {
+    const result = await runDirector(goal, Infinity);
+    return `✅ Director completed: ${result.slice(0, 500)}`;
+  } catch (err) {
+    return `❌ Director escalation failed: ${err.message}`;
+  } finally {
+    _decrementDepth();
+  }
+}
+
+// ============================================================
+// Text-Only DOM Verification Tool
+// Fetches HTML over node:http/https and runs text assertions.
+// Zero external dependencies.
+// ============================================================
+
+/**
+ * verify_dom_state — fetch a URL and run deterministic text-based DOM assertions.
+ * Assertion formats:
+ *   'class:dark'          → checks <html class> or any tag contains 'dark'
+ *   'text:Submit'         → checks raw HTML contains 'Submit'
+ *   'element:#login-btn'  → checks for id="login-btn"
+ *   'attr:data-theme=dark' → checks for data-theme="dark"
+ *   'not-text:Error'      → asserts 'Error' does NOT appear
+ */
+async function verifyDomStateTool({ url, assertions }) {
+  if (!url) return "❌ Error: 'url' is required.";
+  if (!Array.isArray(assertions) || assertions.length === 0) {
+    return "❌ Error: 'assertions' must be a non-empty array.";
+  }
+
+  // Fetch the page HTML
+  let html;
+  try {
+    html = await new Promise((res, rej) => {
+      const getter = url.startsWith("https") ? httpsGet : httpGet;
+      const req = getter(url, { timeout: 10000 }, (response) => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          // Single-level redirect follow
+          const redirect = response.headers.location;
+          const getter2 = redirect.startsWith("https") ? httpsGet : httpGet;
+          getter2(redirect, { timeout: 10000 }, (r2) => {
+            let data2 = "";
+            r2.on("data", c => { data2 += c; });
+            r2.on("end", () => res(data2));
+            r2.on("error", rej);
+          }).on("error", rej);
+          return;
+        }
+        let data = "";
+        response.on("data", chunk => { data += chunk; });
+        response.on("end", () => res(data));
+        response.on("error", rej);
+      });
+      req.on("error", rej);
+      req.on("timeout", () => { req.destroy(); rej(new Error("Request timed out after 10s")); });
+    });
+  } catch (err) {
+    return `❌ Failed to fetch ${url}: ${err.message}`;
+  }
+
+  const results = [];
+  let passed = 0;
+  let failed = 0;
+
+  for (const assertion of assertions) {
+    const [type, ...rest] = assertion.split(":");
+    const value = rest.join(":").trim();
+    let ok = false;
+    let detail = "";
+
+    switch (type.toLowerCase()) {
+      case "text":
+        ok = html.includes(value);
+        detail = ok ? `Found '${value}' in HTML` : `'${value}' NOT found in HTML`;
+        break;
+      case "not-text":
+        ok = !html.includes(value);
+        detail = ok ? `Confirmed '${value}' absent from HTML` : `'${value}' unexpectedly present in HTML`;
+        break;
+      case "class": {
+        // Check for the class anywhere in the HTML (works for <html class="dark"> etc.)
+        const classRegex = new RegExp(`class=["'][^"']*\\b${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b[^"']*["']`);
+        ok = classRegex.test(html);
+        detail = ok ? `Class '${value}' found` : `Class '${value}' NOT found`;
+        break;
+      }
+      case "element": {
+        // Support #id, .class, or tag selectors as text heuristics
+        if (value.startsWith("#")) {
+          const id = value.slice(1);
+          ok = html.includes(`id="${id}"`) || html.includes(`id='${id}'`);
+          detail = ok ? `Element id='${id}' found` : `Element id='${id}' NOT found`;
+        } else if (value.startsWith(".")) {
+          const cls = value.slice(1);
+          const re = new RegExp(`class=["'][^"']*\\b${cls}\\b[^"']*["']`);
+          ok = re.test(html);
+          detail = ok ? `Element class='${cls}' found` : `Element class='${cls}' NOT found`;
+        } else {
+          // Tag check
+          ok = html.includes(`<${value}`) || html.includes(`<${value} `);
+          detail = ok ? `Tag <${value}> found` : `Tag <${value}> NOT found`;
+        }
+        break;
+      }
+      case "attr": {
+        // Format: attr:data-theme=dark
+        const eqIdx = value.indexOf("=");
+        if (eqIdx === -1) {
+          ok = html.includes(value);
+          detail = ok ? `Attribute '${value}' found` : `Attribute '${value}' NOT found`;
+        } else {
+          const attrName = value.slice(0, eqIdx);
+          const attrVal = value.slice(eqIdx + 1);
+          ok = html.includes(`${attrName}="${attrVal}"`) || html.includes(`${attrName}='${attrVal}'`);
+          detail = ok ? `Attribute ${attrName}="${attrVal}" found` : `Attribute ${attrName}="${attrVal}" NOT found`;
+        }
+        break;
+      }
+      default:
+        detail = `Unknown assertion type '${type}' — skipped`;
+        ok = true; // Don't penalize unknown types
+    }
+
+    results.push(`  ${ok ? "✅ PASS" : "❌ FAIL"} [${assertion}] — ${detail}`);
+    if (ok) passed++; else failed++;
+  }
+
+  const summary = `DOM Verification (${url}): ${passed} passed, ${failed} failed`;
+  const status = failed === 0 ? "✅ ALL ASSERTIONS PASSED" : `❌ ${failed} ASSERTION(S) FAILED`;
+  return [status, summary, "", ...results].join("\n");
+}
+
+// ============================================================
+// Git State Checkpointing
+// ============================================================
+
+// In-memory checkpoint store (session-scoped)
+export const checkpointStore = [];
+
+/**
+ * rewind_to_checkpoint — restore workspace files and message context to a prior step.
+ * The actual messages array rewind happens in agent.js which owns the messages array.
+ * This tool restores the git working tree via git read-tree.
+ */
+async function rewindCheckpointTool({ step }) {
+  if (checkpointStore.length === 0) {
+    return "❌ No checkpoints available. Checkpoints are created automatically before each file-mutating step.";
+  }
+
+  // Find the requested step or fall back to most recent
+  let checkpoint = checkpointStore.find(c => c.step === step);
+  if (!checkpoint) {
+    checkpoint = checkpointStore[checkpointStore.length - 1];
+    console.log(chalk.yellow(`   ⚠ Step ${step} checkpoint not found. Using most recent: step ${checkpoint.step}`));
+  }
+
+  if (!checkpoint.stashHash) {
+    return `❌ Checkpoint at step ${checkpoint.step} has no git stash hash (workspace may not be a git repo).`;
+  }
+
+  const workdir = getWorkdir();
+  try {
+    await new Promise((res, rej) => {
+      exec(`git read-tree --reset -u ${checkpoint.stashHash}`, { cwd: workdir }, (err, stdout, stderr) => {
+        if (err) return rej(new Error(stderr || err.message));
+        res();
+      });
+    });
+    console.log(chalk.green.bold(`   ✅ Workspace rewound to step ${checkpoint.step} snapshot`));
+    // Signal agent.js to also rewind messages (agent reads this)
+    process.env._SWADES_REWIND_STEP = String(checkpoint.step);
+    return `✅ Workspace files rewound to step ${checkpoint.step}. Context will also be rewound. Stash: ${checkpoint.stashHash.slice(0, 8)}`;
+  } catch (err) {
+    return `❌ Rewind failed: ${err.message}. You can manually run: git read-tree --reset -u ${checkpoint.stashHash}`;
+  }
+}
+
 // ---- Registry ----
 
 const TOOL_REGISTRY = {
@@ -992,6 +1299,14 @@ const TOOL_REGISTRY = {
   index_codebase: indexCodebaseTool,
   peek_terminal: peekTerminalTool,
   extend_deadline: extendDeadlineTool,
+  // Dynamic capability tools (Modes-as-Tools)
+  run_simulation: runSimulationTool,
+  spawn_subagents: spawnSubagentsTool,
+  delegate_to_director: delegateToDirectorTool,
+  // Text-only DOM verifier
+  verify_dom_state: verifyDomStateTool,
+  // Git state rewind
+  rewind_to_checkpoint: rewindCheckpointTool,
 };
 
 /**

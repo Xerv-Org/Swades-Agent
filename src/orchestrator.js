@@ -94,7 +94,7 @@ export async function evaluateComplexity(task) {
  * Uses git apply with 3-way merge fallback.
  * For conflicts, spawns a merge-resolution subagent.
  */
-async function mergeDiffs(results, baseDir) {
+export async function mergeDiffs(results, baseDir) {
   console.log(chalk.cyan.bold("\n🔗 Merging subagent artifacts into real workspace..."));
 
   const successfulResults = results.filter(r => r.success && r.diff.length > 0);

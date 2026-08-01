@@ -6,13 +6,22 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
+import { exec } from "node:child_process";
 import { callLLM, MODEL } from "./llm.js";
-import { executeTool, activeDeadline, detectProjectStack } from "./tools.js";
+import { executeTool, activeDeadline, detectProjectStack, checkpointStore } from "./tools.js";
 import { SYSTEM_PROMPT, TOOL_SCHEMAS } from "./prompts.js";
 import { getMemoryContext, recordSession } from "./memory.js";
-import { runOrchestrated } from "./orchestrator.js";
-import { runSimulated } from "./simulator.js";
 import { getSwadesCacheDir } from "./cleanup.js";
+
+// Shell helper for git stash snapshots
+function shell(cmd, cwd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { cwd, maxBuffer: 1024 * 1024, timeout: 10000 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(stderr || err.message));
+      resolve((stdout || "").trim());
+    });
+  });
+}
 
 // ============================================================
 // LoopDetector — Prevents infinite loops and repetitive behavior
@@ -142,24 +151,10 @@ export async function runAgent(task, maxSteps, existingMessages, image) {
   const max = maxSteps || parseInt(process.env.MAX_STEPS) || Infinity;
   let messages = existingMessages;
 
-  // ---- Orchestrator gate (only for fresh top-level tasks) ----
-  if (!existingMessages && task && !task.startsWith("[SUBAGENT:") && !task.startsWith("[SIMULATION") && !image) {
-    const workdir = process.env.WORKDIR || process.cwd();
-    const resolvedWorkdir = resolve(workdir);
-
-    try {
-      const orchestratorResult = await runOrchestrated(task, resolvedWorkdir);
-      if (orchestratorResult !== null) {
-        // HIGH complexity — orchestrator handled everything
-        await recordSession(task, orchestratorResult, ["orchestrator", "subagents", "simulator"]);
-        return orchestratorResult;
-      }
-    } catch (err) {
-      console.log(chalk.yellow(`   ⚠ Orchestrator eval error: ${err.message}, proceeding with single agent`));
-    }
-
-    // LOW complexity — falls through to normal ReAct loop below
-  }
+  // NOTE: The old orchestrator gate was here (auto-routing to runOrchestrated).
+  // It has been removed. The agent now starts directly in the ReAct loop
+  // and uses run_simulation / spawn_subagents / delegate_to_director tools
+  // mid-flight whenever the task complexity demands it.
 
   if (!messages) {
     const workdir = process.env.WORKDIR || process.cwd();
@@ -235,6 +230,20 @@ STACK RULES:
 
   const toolsUsed = new Set();
   const loopDetector = new LoopDetector();
+  // Track mutating steps for checkpoint deduplication
+  let lastCheckpointStep = -1;
+  const workdir = process.env.WORKDIR || process.cwd();
+  const resolvedWorkdir = resolve(workdir);
+
+  // ---- Context Window Pruner ----
+  function pruneContext(msgs) {
+    if (msgs.length <= 40) return msgs;
+    const systemMsgs = msgs.filter(m => m.role === "system");
+    const recent = msgs.slice(-15);
+    const middle = msgs.slice(systemMsgs.length, msgs.length - 15);
+    const summary = `[CONTEXT PRUNED: ${middle.length} older messages compressed to save context. Those steps covered file reads, patches, and verifications. Current workspace state reflects all those changes.]`;
+    return [...systemMsgs, { role: "user", content: summary }, ...recent];
+  }
 
   let estimatedDurationSeconds = 180;
   if (!existingMessages && task) {
@@ -372,11 +381,31 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
 
     // Execute tools with loop detection
     const stepToolNames = [];
+    const MUTATING_TOOLS = new Set(["write_file", "patch_file", "run_command"]);
+
     for (const toolCall of response.tool_calls) {
       const { name, arguments: args } = toolCall.function;
       toolsUsed.add(name);
       stepToolNames.push(name);
       console.log(chalk.magenta(`   → ${name}`));
+
+      // ---- Git State Checkpoint (before any mutating tool) ----
+      if (MUTATING_TOOLS.has(name) && lastCheckpointStep !== step) {
+        lastCheckpointStep = step;
+        try {
+          const stashHash = await shell("git stash create", resolvedWorkdir);
+          if (stashHash) {
+            checkpointStore.push({
+              step,
+              stashHash,
+              messagesSnapshot: JSON.parse(JSON.stringify(messages)),
+            });
+            // Keep only last 10 checkpoints to cap memory
+            if (checkpointStore.length > 10) checkpointStore.shift();
+            console.log(chalk.dim(`   💾 Checkpoint saved: step ${step} (stash: ${stashHash.slice(0, 8)})`))
+          }
+        } catch { /* non-fatal — git may not be initialized in this workspace */ }
+      }
 
       // ---- Loop Detection: check before execution ----
       const loopWarning = loopDetector.recordCall(name, args, step);
@@ -392,6 +421,23 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       console.log(chalk.gray(`   ${preview.split("\n").join("\n   ")}\n`));
 
       messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
+
+      // ---- Rewind signal from rewind_to_checkpoint tool ----
+      if (name === "rewind_to_checkpoint" && process.env._SWADES_REWIND_STEP) {
+        const rewindStep = parseInt(process.env._SWADES_REWIND_STEP);
+        delete process.env._SWADES_REWIND_STEP;
+        const checkpoint = checkpointStore.find(c => c.step === rewindStep)
+          || checkpointStore[checkpointStore.length - 1];
+        if (checkpoint?.messagesSnapshot) {
+          console.log(chalk.cyan.bold(`   ⏮️  Context rewound to step ${checkpoint.step}`));
+          // Restore message history to the checkpoint state, keep the rewind tool result
+          const rewindResult = messages[messages.length - 1];
+          messages.length = 0;
+          messages.push(...checkpoint.messagesSnapshot);
+          messages.push(rewindResult);
+        }
+        break; // Exit tool loop — fresh loop will start from rewound context
+      }
     }
 
     // ---- Stagnation Detection: check after step ----
@@ -403,6 +449,16 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
         role: "user",
         content: stagnationWarning,
       });
+    }
+
+    // ---- Context Window Pruning (every step, if messages are large) ----
+    if (messages.length > 40) {
+      const prunedMessages = pruneContext(messages);
+      if (prunedMessages.length < messages.length) {
+        console.log(chalk.dim(`   🧹 Context pruned: ${messages.length} → ${prunedMessages.length} messages`));
+        messages.length = 0;
+        messages.push(...prunedMessages);
+      }
     }
 
     console.log(chalk.dim("─".repeat(50)));

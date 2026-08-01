@@ -12,6 +12,7 @@ import chalk from "chalk";
 import { callLLM } from "./llm.js";
 import { runAgent } from "./agent.js";
 import { executeTool } from "./tools.js";
+import { Semaphore } from "./subagent.js";
 
 // ---- Shell helper ----
 
@@ -474,18 +475,47 @@ export async function runSimulated(task, baseDir) {
     console.log(chalk.dim(`      [${s.id}] ${s.strategy.slice(0, 100)}`));
   }
 
-  // 2. Run each scenario in sandbox (sequentially to manage resource pressure)
-  const results = [];
-  for (const scenario of scenarios) {
-    console.log(chalk.cyan.bold(`\n── Scenario ${scenario.id} ──`));
-    const result = await runSandbox(scenario, task, baseDir);
-    results.push(result);
+  // 2. Run scenarios concurrently with a bounded semaphore
+  //    SIM_CONCURRENCY env var controls parallelism (default: 2)
+  const concurrencyLimit = parseInt(process.env.SIM_CONCURRENCY) || 2;
+  const simSemaphore = new Semaphore(concurrencyLimit);
+  console.log(chalk.dim(`   ⚡ Running ${scenarios.length} scenario(s) with concurrency=${concurrencyLimit}...`));
 
-    // Clean up sandbox immediately after capture
-    if (result.sandboxPath) {
-      await removeSandbox(result.sandboxPath, baseDir);
-    }
-  }
+  const settled = await Promise.allSettled(
+    scenarios.map(scenario =>
+      simSemaphore.acquire().then(async () => {
+        console.log(chalk.cyan.bold(`\n── Scenario ${scenario.id} ──`));
+        let result;
+        try {
+          result = await runSandbox(scenario, task, baseDir);
+        } finally {
+          simSemaphore.release();
+          // Clean up sandbox immediately after capture
+          if (result?.sandboxPath) {
+            await removeSandbox(result.sandboxPath, baseDir).catch(() => {});
+          }
+        }
+        return result;
+      })
+    )
+  );
+
+  const results = settled.map((s, i) => {
+    if (s.status === "fulfilled") return s.value;
+    // Surface a failed entry so verdict selection can still pick the best
+    console.log(chalk.red(`   ❌ Scenario ${scenarios[i].id} promise rejected: ${s.reason?.message}`));
+    return {
+      id: scenarios[i].id,
+      strategy: scenarios[i].strategy,
+      diff: "",
+      diffLines: 0,
+      summary: s.reason?.message || "Unknown error",
+      compilationResult: "FAILED",
+      testResult: "FAILED",
+      success: false,
+      sandboxPath: null,
+    };
+  });
 
   // 3. Select winner
   const verdict = await selectWinner(task, results);
