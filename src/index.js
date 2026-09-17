@@ -10,9 +10,10 @@ import { runAgent } from "./agent.js";
 import { runDirector } from "./director.js";
 import { runCUA } from "./cua.js";
 import { executeTool } from "./tools.js";
-import { callLLM } from "./llm.js";
+import { callLLM, API_KEY } from "./llm.js";
 import { migrateAndCleanup } from "./cleanup.js";
 import { recordSession } from "./memory.js";
+import { initApprovalFlow } from "./approvalFlow.js";
 
 export { runAgent, runDirector, runCUA, executeTool };
 
@@ -21,7 +22,7 @@ export { runAgent, runDirector, runCUA, executeTool };
 // ============================================================
 
 function printHelp() {
-  console.log(chalk.cyan.bold("\n  🚀 Swades Agent v3.0\n"));
+  console.log(chalk.cyan.bold("\n  🚀 Swades Agent v4.0\n"));
   console.log(chalk.white("  Usage: swades-agent [task] [flags]\n"));
   console.log(chalk.dim("  If no task is given, enters the persistent chat loop.\n"));
 
@@ -98,8 +99,8 @@ function parseCLI() {
 // ============================================================
 
 async function startup(isCUA) {
-  if (!process.env.API_KEY) {
-    console.log(chalk.red("❌ Missing API_KEY in .env. Copy .env.example → .env and add your key."));
+  if (!API_KEY) {
+    console.log(chalk.red("❌ Missing API_KEY / GROQ_API_KEY in .env. Copy .env.example → .env and add your key."));
     process.exit(1);
   }
 
@@ -111,6 +112,14 @@ async function startup(isCUA) {
     console.log(chalk.dim("⚡ Indexing codebase..."));
     const r = await executeTool("index_codebase", {});
     console.log(chalk.dim(`   ${r}\n`));
+
+    // Initialize approval flow (asks user once, saves preference)
+    try {
+      const mode = await initApprovalFlow();
+      console.log(chalk.dim(`   🔒 Approval mode: ${mode}\n`));
+    } catch (approvalErr) {
+      console.log(chalk.dim(`   ⚠ Approval flow init skipped: ${approvalErr.message}`));
+    }
   }
 }
 
@@ -149,7 +158,7 @@ async function chatLoop(initialTask, initialImage) {
   // Session-persistent message history
   let sessionMessages = null;
 
-  console.log(chalk.cyan.bold("\n  🚀 Swades Agent v3.0"));
+  console.log(chalk.cyan.bold("\n  🚀 Swades Agent v4.0"));
   console.log(chalk.dim(`  Workspace: ${resolvedWorkdir}`));
   console.log(chalk.dim("  Type 'exit' to quit | 'clear' to reset context | '/help' for commands\n"));
   console.log(chalk.dim("─".repeat(60)));
@@ -215,6 +224,7 @@ async function chatLoop(initialTask, initialImage) {
     console.log(chalk.dim("\n" + "─".repeat(60)));
     try {
       const result = await runAgent(task, null, sessionMessages, image);
+      // Note: tier info is displayed by the orchestrator itself when it activates
       // Record completed session
       await recordSession(task, typeof result === "string" ? result : String(result), []);
       console.log(chalk.dim("\n─".repeat(60)));
@@ -255,8 +265,8 @@ async function main() {
       console.log(chalk.red("❌ --cua requires a task. Usage: swades-agent --cua \"your task\""));
       process.exit(1);
     }
-    if (!process.env.API_KEY) {
-      console.log(chalk.red("❌ Missing API_KEY in .env"));
+    if (!API_KEY) {
+      console.log(chalk.red("❌ Missing API_KEY / GROQ_API_KEY in .env"));
       process.exit(1);
     }
     try {

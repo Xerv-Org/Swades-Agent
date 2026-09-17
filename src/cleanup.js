@@ -20,8 +20,9 @@ import chalk from "chalk";
  * @returns {string} - Absolute path to ~/.cache/swades/<project-hash>/
  */
 export function getSwadesCacheDir(workdir) {
-  const hash = createHash("sha256").update(workdir).digest("hex").slice(0, 16);
-  const projectName = basename(workdir).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const dir = workdir || process.env.WORKDIR || process.cwd();
+  const hash = createHash("sha256").update(dir).digest("hex").slice(0, 16);
+  const projectName = basename(dir).replace(/[^a-zA-Z0-9_-]/g, "_");
   return resolve(homedir(), ".cache", "swades", `${projectName}-${hash}`);
 }
 
@@ -32,8 +33,9 @@ export function getSwadesCacheDir(workdir) {
  * @returns {string} - Absolute path to /tmp/swades_worktrees/<project-hash>/
  */
 export function getWorktreeTempDir(workdir) {
-  const hash = createHash("sha256").update(workdir).digest("hex").slice(0, 16);
-  const projectName = basename(workdir).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const dir = workdir || process.env.WORKDIR || process.cwd();
+  const hash = createHash("sha256").update(dir).digest("hex").slice(0, 16);
+  const projectName = basename(dir).replace(/[^a-zA-Z0-9_-]/g, "_");
   return resolve(tmpdir(), "swades_worktrees", `${projectName}-${hash}`);
 }
 

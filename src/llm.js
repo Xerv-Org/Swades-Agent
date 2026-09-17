@@ -1,13 +1,54 @@
 // ============================================================
 // llm.js — LLM client with streaming + multi-model fallback cascade
+// Supports: OpenRouter, Groq, OpenAI, Ollama, and any OpenAI-compatible API
 // ============================================================
 
 import OpenAI from "openai";
 import chalk from "chalk";
 
-const API_KEY  = process.env.API_KEY;
-const BASE_URL = process.env.BASE_URL || "https://openrouter.ai/api/v1";
-export const MODEL = process.env.MODEL || "openrouter/free";
+// ---- Provider detection ----
+
+function detectProvider(url) {
+  if (url && url.includes("groq.com")) return "groq";
+  if (!process.env.BASE_URL && process.env.GROQ_API_KEY) return "groq";
+  if (url && url.includes("openrouter.ai")) return "openrouter";
+  if (!process.env.BASE_URL && process.env.OPENAI_API_KEY) return "openai";
+  if (url && url.includes("api.openai.com")) return "openai";
+  if (url && (url.includes("localhost") || url.includes("127.0.0.1"))) return "ollama";
+  return "generic";
+}
+
+export const PROVIDER = detectProvider(process.env.BASE_URL);
+
+const DEFAULT_BASE_URLS = {
+  groq:       "https://api.groq.com/openai/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  openai:     "https://api.openai.com/v1",
+  ollama:     "http://localhost:11434/v1",
+  generic:    "https://openrouter.ai/api/v1",
+};
+
+export const BASE_URL = process.env.BASE_URL || DEFAULT_BASE_URLS[PROVIDER];
+
+// ---- API key resolution (supports provider-specific env vars) ----
+
+export const API_KEY = process.env.API_KEY
+  || (PROVIDER === "groq"   ? process.env.GROQ_API_KEY   : null)
+  || (PROVIDER === "openai" ? process.env.OPENAI_API_KEY  : null)
+  || process.env.GROQ_API_KEY
+  || process.env.OPENAI_API_KEY;
+
+// ---- Default model per provider ----
+
+const DEFAULT_MODELS = {
+  openrouter: "openrouter/free",
+  groq:       "llama-3.3-70b-versatile",
+  openai:     "gpt-4o",
+  ollama:     "qwen2.5-coder:7b",
+  generic:    "gpt-4o",
+};
+
+export const MODEL = process.env.MODEL || DEFAULT_MODELS[PROVIDER] || "openrouter/free";
 
 // Fallback cascade: comma-separated list of models to try if primary fails
 const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || "")
@@ -17,18 +58,39 @@ const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || "")
 
 let _client = null;
 
-function getClient() {
-  if (!_client) {
-    if (!API_KEY) throw new Error("Missing API_KEY in environment. Copy .env.example → .env and add your key.");
-    _client = new OpenAI({
-      apiKey: API_KEY,
-      baseURL: BASE_URL,
-      defaultHeaders: {
+/** Build provider-specific headers — only send what each provider expects. */
+function getProviderHeaders() {
+  switch (PROVIDER) {
+    case "openrouter":
+      return {
         "HTTP-Referer": "https://xerv.netlify.app/swades.html",
         "X-Title": "Swades Agent",
         "X-OpenRouter-Title": "Swades Agent",
         "X-OpenRouter-Categories": "cli-agent",
-      },
+      };
+    case "groq":
+      return {}; // Groq needs no custom headers — just the API key
+    case "openai":
+      return {};
+    default:
+      return {};
+  }
+}
+
+function getClient() {
+  if (!_client) {
+    if (!API_KEY) {
+      const hint = PROVIDER === "groq"
+        ? "Set API_KEY or GROQ_API_KEY in .env"
+        : PROVIDER === "openai"
+        ? "Set API_KEY or OPENAI_API_KEY in .env"
+        : "Set API_KEY in .env";
+      throw new Error(`Missing API key. ${hint}. Copy .env.example → .env and add your key.`);
+    }
+    _client = new OpenAI({
+      apiKey: API_KEY,
+      baseURL: BASE_URL,
+      defaultHeaders: getProviderHeaders(),
     });
   }
   return _client;

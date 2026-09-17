@@ -282,7 +282,54 @@ export const TOOL_SCHEMAS = [
         required: ["step"]
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'report_progress',
+      description: 'Report current progress to the orchestrator. Call this periodically during long tasks so the orchestrator knows you are not stuck.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['working', 'blocked', 'needs_help', 'almost_done'], description: 'Current status' },
+          message: { type: 'string', description: 'Brief progress update' },
+          filesModified: { type: 'array', items: { type: 'string' }, description: 'Files modified so far' }
+        },
+        required: ['status', 'message']
+      }
+    }
   }
 ];
 
+export const ROLE_PROMPTS = {
+  planner: `You are the PLANNER agent. Your job is to break down the user's task into concrete subtasks, define acceptance criteria for each, assign roles, and create a dependency graph. Output a structured plan. Do NOT write code — only plan.`,
+  
+  architect: `You are the ARCHITECT agent. Your job is to design the file structure, API contracts, data models, and component boundaries. Create new files with skeleton structures and interface definitions. Do NOT implement business logic — only architecture.`,
+  
+  implementer: `You are an IMPLEMENTER agent working on an isolated subtask. Write production-quality code that fulfills your assigned task completely. Follow existing code patterns. Use patch_file for existing files, write_file for new files. Run syntax checks after every edit.`,
+  
+  test: `You are the TEST agent. Your job is to write comprehensive tests for the changes made by implementer agents. Read the modified files, understand what changed, and write unit tests, integration tests, or both. Run the tests and report results.`,
+  
+  review: `You are the REVIEW agent (code reviewer). Your job is to review diffs produced by other agents. Look for: bugs, security issues, performance problems, style violations, missing error handling, incomplete implementations. Output a structured review with severity ratings.`,
+  
+  merge: `You are the MERGE agent. Your job is to resolve merge conflicts between agent outputs. Read the conflicting diffs, understand the intent of each, and produce a clean merged result using patch_file. Prioritize correctness over either individual diff.`,
+  
+  rollback: `You are the ROLLBACK agent. You are activated when a quality gate fails after merge. Your job is to identify which patch caused the failure, rollback it, and optionally fix the issue. Use git stash and rewind_to_checkpoint as needed.`,
+  
+  critic: `You are the CRITIC in a debate round. Your job is to attack the proposed implementation: find bugs, edge cases, security holes, performance issues, missing requirements. Be thorough and adversarial. List every issue you find with severity.`,
+  
+  fixer: `You are the FIXER in a debate round. You receive an implementation and a critic's attack. Your job is to address every issue raised by the critic while preserving the original intent. Produce an improved implementation.`,
+  
+  synthesis: `You are the SYNTHESIS agent. Produce a structured final report: summary of changes, files modified, tests run, identified risks, and suggested next steps.`
+};
 
+export function getRolePrompt(role) {
+  if (ROLE_PROMPTS[role]) {
+    return ROLE_PROMPTS[role];
+  }
+  if (role && role.startsWith("custom:")) {
+    const customName = role.replace("custom:", "").trim();
+    return `You are a specialized ${customName} agent. Focus deeply on your domain expertise to inspect, analyze, and complete your assigned subtask.`;
+  }
+  return "You are a specialized agent. Complete your assigned task to the best of your abilities.";
+}

@@ -12,6 +12,7 @@ import { executeTool, activeDeadline, detectProjectStack, checkpointStore } from
 import { SYSTEM_PROMPT, TOOL_SCHEMAS } from "./prompts.js";
 import { getMemoryContext, recordSession } from "./memory.js";
 import { getSwadesCacheDir } from "./cleanup.js";
+import { recordAgentPerformance } from "./memory.js";
 
 // Shell helper for git stash snapshots
 function shell(cmd, cwd) {
@@ -147,7 +148,7 @@ export async function prepareImageUrl(imagePathOrUrl) {
  * @param {string} image - Optional image path or URL
  * @returns {string} - Final answer
  */
-export async function runAgent(task, maxSteps, existingMessages, image) {
+export async function runAgent(task, maxSteps, existingMessages, image, role = null) {
   const max = maxSteps || parseInt(process.env.MAX_STEPS) || Infinity;
   let messages = existingMessages;
 
@@ -222,8 +223,21 @@ STACK RULES:
       }
     }
 
+    let systemContent = SYSTEM_PROMPT + workspaceContext + indexContext + stackContext + memoryContext;
+
+    // Inject role-specific context if this is a role-assigned agent
+    if (role) {
+      const { getRolePrompt } = await import("./prompts.js");
+      const rolePrompt = getRolePrompt(role);
+      if (rolePrompt) {
+        systemContent += `\n\n## AGENT ROLE\n${rolePrompt}`;
+      }
+      // Set agent ID for progress tracking
+      process.env._SWADES_AGENT_ID = role;
+    }
+
     messages = [
-      { role: "system", content: SYSTEM_PROMPT + workspaceContext + indexContext + stackContext + memoryContext },
+      { role: "system", content: systemContent },
       { role: "user", content: userContent },
     ];
   }
@@ -376,6 +390,11 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       console.log(answer);
       console.log(chalk.green.bold("\n✅ Done\n"));
       await recordSession(task, answer, [...toolsUsed]);
+      // Record agent performance metrics
+      if (role) {
+        const durationMs = Date.now() - (activeDeadline.startTime || Date.now());
+        try { await recordAgentPerformance(role, true, durationMs); } catch (_) {}
+      }
       return answer;
     }
 

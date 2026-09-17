@@ -11,6 +11,7 @@ import { existsSync } from "node:fs";
 import { callLLM } from "./llm.js";
 import { runSubagent, runSubagentsParallel } from "./subagent.js";
 import { runSimulated } from "./simulator.js";
+import { runOrchestratorLoop } from "./orchestratorLoop.js";
 
 // ---- Shell helper ----
 
@@ -25,44 +26,43 @@ function shell(cmd, cwd) {
 
 // ---- Complexity Evaluation ----
 
-const CLASSIFIER_PROMPT = `You are a task complexity classifier for an AI coding agent. Given a coding task, classify it.
+const CLASSIFIER_PROMPT = `You are a task complexity classifier for an AI coding agent. Given a coding task, classify it into one of 4 tiers:
 
-LOW complexity — Execute directly in a single agent thread:
-- Single-file edits, documentation updates, simple bug fixes
-- Config changes, renaming, formatting
-- Anything sequential that does not benefit from parallelism
+TINY — 1 solo agent, no orchestration:
+  Single file edit, explanation, quick command, docs update, config tweak
 
-HIGH complexity — Requires parallel subagents + simulation:
-- Multi-file refactors spanning 3+ files
-- Full feature implementations (frontend + backend + tests)
-- Architectural changes, large-scale rewrites
-- Tasks where multiple valid approaches exist and simulation would help pick the best
+NORMAL — planner + 2-4 agents:
+  Multi-file feature, moderate refactor, add tests, bug fix across files
+
+BIG — planner + 6-12 agents:
+  Cross-module feature, large refactor, new subsystem, migration
+
+HUGE — planner + 12-25+ agents (must justify each):
+  Full architecture overhaul, massive migration, rewrite
 
 RULES:
-- Be conservative: if in doubt, classify as LOW.
-- For HIGH complexity, decompose into 2-5 concrete subtasks.
-- Each subtask must be independently executable in an isolated workspace.
-- Return ONLY valid JSON, nothing else.
-
-LOW format:  {"level": "LOW"}
-HIGH format: {"level": "HIGH", "subtasks": [{"label": "short-name", "description": "what to do"}, ...]}`;
+- Return ONLY valid JSON matching this structure exactly:
+{
+  "tier": "tiny" | "normal" | "big" | "huge",
+  "reason": "explanation of why",
+  "agents": [{ "id": "string", "role": "string", "task": "string", "dependsOn": ["agent_id"] }],
+  "debateEnabled": boolean,
+  "approvals": { "destructiveEdits": boolean, "dependencyInstall": boolean, "architectureChanges": boolean }
+}
+- For TINY: agents = [{"id": "solo", "role": "implementer", "task": "<original_task>", "dependsOn": []}]
+- For NORMAL/BIG/HUGE: Include planner, architect (if needed), implementers, test, review, merge agents. Each with a concrete task description and dependency chain.`;
 
 /**
  * Evaluate task complexity using LLM classification.
  *
  * @param {string} task - The coding task
- * @returns {{ level: "LOW"|"HIGH", subtasks: Array<{label, description}> }}
+ * @returns {Promise<Object>}
  */
 export async function evaluateComplexity(task) {
   console.log(chalk.dim("   🧠 Evaluating task complexity..."));
 
-  let systemPrompt = CLASSIFIER_PROMPT;
-  if (process.env.SUBAGENTS_ONLY === "true") {
-    systemPrompt += "\n\nCRITICAL: The user has explicitly enabled subagents-only execution. You MUST classify this task as HIGH complexity and decompose it into 2-5 concrete subtasks.";
-  }
-
   const messages = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: CLASSIFIER_PROMPT },
     { role: "user", content: `Task: ${task}` },
   ];
 
@@ -73,18 +73,20 @@ export async function evaluateComplexity(task) {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const result = JSON.parse(jsonMatch[0]);
-      if (result.level === "HIGH" && Array.isArray(result.subtasks) && result.subtasks.length > 0) {
-        console.log(chalk.cyan(`   🧠 Complexity: HIGH (${result.subtasks.length} subtasks)`));
-        return result;
-      }
-      console.log(chalk.dim("   🧠 Complexity: LOW"));
-      return { level: "LOW", subtasks: [] };
+      console.log(chalk.cyan(`   🧠 Complexity: ${result.tier.toUpperCase()} (${result.agents?.length || 0} agents)`));
+      return result;
     }
   } catch (e) {
-    console.log(chalk.dim(`   ⚠ Complexity eval failed: ${e.message}, defaulting to LOW`));
+    console.log(chalk.dim(`   ⚠ Complexity eval failed: ${e.message}, defaulting to TINY`));
   }
 
-  return { level: "LOW", subtasks: [] };
+  return {
+    tier: "tiny",
+    reason: "Fallback due to eval failure",
+    agents: [{ id: "solo", role: "implementer", task, dependsOn: [] }],
+    debateEnabled: false,
+    approvals: { destructiveEdits: false, dependencyInstall: false, architectureChanges: false }
+  };
 }
 
 // ---- Diff Merge Engine ----
@@ -169,35 +171,33 @@ Your job: Manually apply the intended changes from this diff to the current code
 
 /**
  * Run the full orchestrated pipeline:
- * 1. Evaluate complexity
- * 2. If LOW → return null (caller runs normal agent)
- * 3. If HIGH → spawn subagents in parallel → merge diffs
- *    Then run simulation on the merged state for final verification
  *
  * @param {string} task    - The coding task
  * @param {string} baseDir - Real workspace root
- * @returns {string|null}  - Result string, or null if LOW complexity
+ * @returns {string|null}  - Result string, or null if TINY complexity
  */
 export async function runOrchestrated(task, baseDir) {
-  const evaluation = await evaluateComplexity(task);
+  let plan = await evaluateComplexity(task);
 
-  // --sim flag: force full pipeline even if classifier says LOW
+  // --sim flag: force full pipeline even if classifier says TINY
   const forceOrchestrated = process.env.FORCE_ORCHESTRATED === "true";
 
-  if (evaluation.level === "LOW" && !forceOrchestrated) {
+  if (plan.tier === "tiny" && !forceOrchestrated) {
     return null; // Signal to caller: run normal single-agent
   }
 
-  // If forced on a LOW task, synthesize a minimal single-subtask decomposition
-  if (evaluation.level === "LOW" && forceOrchestrated) {
-    console.log(chalk.yellow("   ⚡ Complexity: LOW but --sim flag forces orchestrated pipeline"));
-    evaluation.level = "HIGH";
-    evaluation.subtasks = [{ label: "main", description: task }];
+  if (plan.tier === "tiny" && forceOrchestrated) {
+    console.log(chalk.yellow("   ⚡ Complexity: TINY but --sim flag forces orchestrated pipeline"));
+    plan.tier = "normal";
+    plan.agents = [
+      { id: "planner", role: "planner", task: "Plan the implementation", dependsOn: [] },
+      { id: "implementer-1", role: "implementer", task, dependsOn: ["planner"] }
+    ];
   }
 
   console.log(chalk.green.bold("\n🔷 Orchestrated Execution Activated"));
   console.log(chalk.dim(`   Task: "${task.slice(0, 100)}"`));
-  console.log(chalk.dim(`   Subtasks: ${evaluation.subtasks.length}`));
+  console.log(chalk.dim(`   Tier: ${plan.tier.toUpperCase()}`));
   console.log(chalk.dim("═".repeat(60)));
 
   // Ensure we are inside a git repository so git worktree works
@@ -218,47 +218,6 @@ export async function runOrchestrated(task, baseDir) {
     }
   }
 
-  // Phase 1: Run subagents in parallel
-  const subagentResults = await runSubagentsParallel(evaluation.subtasks, baseDir);
-
-  // Phase 2: Merge diffs into workspace
-  const mergeResult = await mergeDiffs(subagentResults, baseDir);
-
-  // Phase 3: Run simulation on the merged state to verify and optimize
-  if (process.env.SUBAGENTS_ONLY === "true") {
-    console.log(chalk.cyan.bold("\n🧪 Post-merge simulation skipped (Subagents-only mode enabled)."));
-    const summary = [
-      `🔷 Orchestrated execution complete.`,
-      `   Subagents: ${subagentResults.length} spawned, ${subagentResults.filter(r => r.success).length} succeeded`,
-      `   Merge: ${mergeResult.merged} applied, ${mergeResult.failed} failed`,
-      `   Simulation: (skipped)`,
-    ].join("\n");
-    console.log(chalk.green.bold("\n" + summary + "\n"));
-    return summary;
-  }
-
-  console.log(chalk.cyan.bold("\n🧪 Post-merge simulation for verification & optimization..."));
-  const verificationTask = `Verify and optimize the following changes that were just applied to the codebase:
-
-Original task: ${task}
-
-Subagent results:
-${subagentResults.map(r => `- [${r.label}] ${r.success ? "SUCCESS" : "FAILED"}: ${r.summary.slice(0, 200)}`).join("\n")}
-
-Merge result: ${mergeResult.merged} merged, ${mergeResult.failed} failed
-
-Your job: Review the current state of the codebase. Fix any integration issues between the merged subagent outputs. Run any available tests. Ensure everything compiles and works together coherently.`;
-
-  const simResult = await runSimulated(verificationTask, baseDir);
-
-  // Build summary
-  const summary = [
-    `🔷 Orchestrated execution complete.`,
-    `   Subagents: ${subagentResults.length} spawned, ${subagentResults.filter(r => r.success).length} succeeded`,
-    `   Merge: ${mergeResult.merged} applied, ${mergeResult.failed} failed`,
-    `   Simulation: ${simResult}`,
-  ].join("\n");
-
-  console.log(chalk.green.bold("\n" + summary + "\n"));
-  return summary;
+  // Call the new orchestrator loop
+  return await runOrchestratorLoop(plan, baseDir);
 }

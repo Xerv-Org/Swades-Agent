@@ -12,6 +12,7 @@ import chalk from "chalk";
 import { runAgent } from "./agent.js";
 import { executeTool } from "./tools.js";
 import { getWorktreeTempDir } from "./cleanup.js";
+import { getRolePrompt } from './prompts.js';
 
 // ---- Concurrency Semaphore ----
 
@@ -44,7 +45,8 @@ export class Semaphore {
 }
 
 // Shared semaphore — caps parallel subagents at 5
-const globalSemaphore = new Semaphore(5);
+let globalSemaphore = new Semaphore(5);
+export function setSemaphoreLimit(max) { globalSemaphore = new Semaphore(max); }
 
 // ---- Shell helper ----
 
@@ -204,4 +206,104 @@ export async function runSubagentsParallel(subtasks, baseDir) {
   }
 
   return results;
+}
+
+export async function runRoleAgent(agentSpec, baseDir, onProgress = null) {
+  // agentSpec = { id, role, task, dependsOn }
+  // onProgress = callback(agentId, status, message) for orchestrator monitoring
+  
+  await globalSemaphore.acquire();
+  const startTime = Date.now();
+  let worktreePath = null;
+  let interval = null;
+  
+  try {
+    console.log(chalk.cyan.bold(`\n🔹 RoleAgent [${agentSpec.id}] starting as ${agentSpec.role}...`));
+    worktreePath = await createWorktree(agentSpec.id, baseDir);
+
+    const prevWorkdir = process.env.WORKDIR;
+    process.env.WORKDIR = worktreePath;
+
+    try {
+      await executeTool("index_codebase", {});
+    } catch (indexErr) {
+      console.log(chalk.dim(`   ⚠ RoleAgent [${agentSpec.id}] index failed: ${indexErr.message}`));
+    }
+
+    const rolePrompt = getRolePrompt(agentSpec.role);
+    const prefixedTask = `[ROLE: ${agentSpec.role}]\n${rolePrompt}\n\n[TASK]\n${agentSpec.task}\n\nYou are operating in an isolated workspace. Make all necessary changes.`;
+
+    if (onProgress) {
+      interval = setInterval(() => {
+        onProgress(agentSpec.id, 'running', 'Agent is working...');
+      }, 5000);
+    }
+
+    const summary = await runAgent(prefixedTask, Infinity);
+    const diff = await captureWorktreeDiff(worktreePath);
+    
+    if (prevWorkdir !== undefined) process.env.WORKDIR = prevWorkdir;
+    else delete process.env.WORKDIR;
+
+    const diffLines = diff.split("\n").length;
+    console.log(chalk.green(`   ✅ RoleAgent [${agentSpec.id}] complete (${diffLines} diff lines)`));
+
+    return {
+      id: agentSpec.id,
+      role: agentSpec.role,
+      label: agentSpec.id,
+      diff,
+      summary: String(summary).slice(0, 1000),
+      success: true,
+      durationMs: Date.now() - startTime,
+      diffLines
+    };
+  } catch (err) {
+    console.log(chalk.red(`   ❌ RoleAgent [${agentSpec.id}] failed: ${err.message}`));
+    return {
+      id: agentSpec.id,
+      role: agentSpec.role,
+      label: agentSpec.id,
+      diff: "",
+      summary: err.message,
+      success: false,
+      durationMs: Date.now() - startTime,
+      diffLines: 0
+    };
+  } finally {
+    if (interval) clearInterval(interval);
+    if (worktreePath) {
+      await removeWorktree(worktreePath, baseDir);
+    }
+    globalSemaphore.release();
+  }
+}
+
+export async function runDebateCycle(originalDiff, task, baseDir) {
+  console.log(chalk.magenta.bold(`\n⚖️ Starting Debate Cycle...`));
+  
+  // Round 1: Reviewer
+  const reviewSpec = {
+    id: `reviewer-${randomUUID().slice(0,4)}`,
+    role: 'review',
+    task: `Review this diff for the following task:\nTASK: ${task}\n\nDIFF:\n${originalDiff}\n\nCritique the diff and identify bugs or missing requirements.`
+  };
+  
+  const reviewResult = await runRoleAgent(reviewSpec, baseDir);
+  const critique = reviewResult.summary;
+  
+  // Round 2: Fixer
+  const fixSpec = {
+    id: `fixer-${randomUUID().slice(0,4)}`,
+    role: 'fixer',
+    task: `Fix the issues identified in the review.\nORIGINAL TASK: ${task}\n\nORIGINAL DIFF:\n${originalDiff}\n\nCRITIQUE:\n${critique}\n\nProduce an improved diff.`
+  };
+  
+  const fixResult = await runRoleAgent(fixSpec, baseDir);
+  
+  return {
+    improvedDiff: fixResult.diff,
+    critique,
+    fixes: fixResult.summary
+  };
 }

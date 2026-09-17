@@ -2,11 +2,11 @@
   <img src="https://raw.githubusercontent.com/Xerv-Org/Swades-Agent/1c5a8f350fe2990e07dda576eb12ef76a52a6017/logos/swades-clean-removebg-preview.png" width="120" alt="Swades Agent logo — autonomous AI software engineering agent"/>
 </p>
 
-<h1 align="center">Swades Agent</h1>
+<h1 align="center">Swades Agent v4.0</h1>
 
 <p align="center">
   Autonomous AI software engineering agent for your terminal.<br/>
-  ReAct loop · OpenAI-compatible · Token streaming · Self-correcting · 24/7 Director mode
+  Adaptive 1–25+ Agent Scaling · 9-Phase Orchestrator Loop · File Dependency DAG · Patch Safety & Auto-Rollback · Native Groq Support
 </p>
 
 <p align="center">
@@ -16,8 +16,10 @@
 </p>
 
 <p align="center">
+  <a href="#-the-hook-how-to-100000000-overutilise-swades-in-30-seconds">The Hook</a> ·
   <a href="#install">Install</a> ·
   <a href="#how-to-use">How to Use</a> ·
+  <a href="#key-capabilities">Capabilities</a> ·
   <a href="#tools">Tools</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#safety--guardrails">Safety</a>
@@ -27,51 +29,116 @@
 
 ## What is Swades Agent?
 
-Swades Agent is an open-source, terminal-native autonomous AI coding agent built on the **ReAct (Reasoning + Acting)** loop pattern. You give it a coding task in plain text. It reads your codebase, edits files with surgical precision, runs shell commands, searches code, and iterates until the task is done — all without leaving your terminal.
+Swades Agent is an open-source, terminal-native autonomous AI software engineer built on the **ReAct (Reasoning + Acting)** loop pattern. You give it a coding task in plain English. It parses your repository, plans architectural changes, constructs dependency graphs, spawns an adaptive fleet of specialized agents (from 1 to 25+), stages code patches, runs unit tests, and self-heals until the goal is fully accomplished — all without leaving your terminal.
 
-It works with any **OpenAI-compatible API** (OpenAI, OpenRouter, Groq, Ollama, etc.), streams tokens to the terminal in real-time as the model thinks, and runs automatic syntax validation on every file it writes.
+It works natively with **Groq** (`llama-3.3-70b-versatile` at 300+ tok/s), **OpenRouter**, **OpenAI**, and **local Ollama**, streams tokens to your terminal in real-time, and automatically rolls back changes if tests or quality gates fail.
 
-No GUI. No cloud lock-in. No build step. **Zero configuration choices at runtime — just describe your task and go.**
+No GUI required. No cloud lock-in. No build step. **Zero configuration choices at runtime — describe what you need and watch it build.**
 
 <details>
-<summary><b>📊 Codebase Line Count Breakdown</b></summary>
+<summary><b>📊 Codebase Line Count Breakdown (v4.0 Architecture)</b></summary>
 
 | File | Language | Lines of Code | Description |
 | :--- | :--- | :---: | :--- |
-| [`src/cua.js`](src/cua.js) | JavaScript | 596 | CUA desktop orchestrator |
-| [`src/simulator.js`](src/simulator.js) | JavaScript | 505 | Sandbox Simulation Engine |
-| [`src/tools.js`](src/tools.js) | JavaScript | 600+ | File operations, syntax checking, stack detection, shell tools |
-| [`src/agent.js`](src/agent.js) | JavaScript | 290+ | Core ReAct agentic loop + loop detection |
-| [`src/orchestrator.js`](src/orchestrator.js) | JavaScript | 254 | Parent orchestrator, parallel subagents, worktree manager |
-| [`src/subagent.js`](src/subagent.js) | JavaScript | 180+ | Subagent lifecycle and setup |
-| [`src/llm.js`](src/llm.js) | JavaScript | 190+ | OpenAI API wrapper, streaming, multi-model fallback cascade |
-| [`src/prompts.js`](src/prompts.js) | JavaScript | 170+ | System prompts & function-calling schemas |
-| [`src/director.js`](src/director.js) | JavaScript | 110 | Autonomous Director loop supervisor |
-| [`src/index.js`](src/index.js) | JavaScript | 170+ | CLI entry point and argument parser |
-| [`src/memory.js`](src/memory.js) | JavaScript | 90+ | Session persistence & context injection |
-| [`src/cleanup.js`](src/cleanup.js) | JavaScript | 100+ | Cache dir management & legacy migration |
+| [`src/tools.js`](src/tools.js) | JavaScript | 1,357 | 15 tool implementations, syntax checker, stack detection, shell runner |
 | [`src/cua_helper.py`](src/cua_helper.py) | Python | 768 | GNOME Mutter RDP/ScreenCast Wayland automation helper |
+| [`src/cua.js`](src/cua.js) | JavaScript | 596 | Computer Use Agent desktop orchestrator |
+| [`src/simulator.js`](src/simulator.js) | JavaScript | 537 | Multi-scenario sandbox simulation engine |
+| [`src/agent.js`](src/agent.js) | JavaScript | 490 | Core ReAct agentic loop, loop detector, checkpoint stashing |
+| [`src/prompts.js`](src/prompts.js) | JavaScript | 335 | System prompt, 10 specialized role prompts, tool schemas |
+| [`src/index.js`](src/index.js) | JavaScript | 311 | CLI entry point, argument parser, persistent chat loop |
+| [`src/subagent.js`](src/subagent.js) | JavaScript | 309 | Subagent worktree lifecycle, debate mode, dynamic semaphore queue |
+| [`src/orchestratorLoop.js`](src/orchestratorLoop.js) | JavaScript | 306 | Core 9-phase orchestrator loop (Analyse → Plan → Approve → Assign → Monitor → Debate → Merge → Verify → Summarize) |
+| [`src/patchSafety.js`](src/patchSafety.js) | JavaScript | 291 | Staged patches, risk scoring (0–100), diff review, auto-rollback on test failure |
+| [`src/llm.js`](src/llm.js) | JavaScript | 273 | Multi-provider client (Groq, OpenRouter, OpenAI, Ollama), streaming, fallback cascade |
+| [`src/memory.js`](src/memory.js) | JavaScript | 251 | 4-layer persistent memory (Project, Preferences, Tasks, Performance) |
+| [`src/orchestrator.js`](src/orchestrator.js) | JavaScript | 223 | Adaptive 4-tier complexity classifier (Tiny, Normal, Big, Huge) & merge engine |
+| [`src/dependencyGraph.js`](src/dependencyGraph.js) | JavaScript | 218 | File dependency DAG, Kahn's topological sort, conflict prediction, file locking |
+| [`src/qualityGates.js`](src/qualityGates.js) | JavaScript | 140 | Automated quality gates (lint, typecheck, test, build, audit) |
+| [`src/synthesis.js`](src/synthesis.js) | JavaScript | 152 | Post-task report generator (summary, risks, tests, next steps, telemetry) |
 | [`src/take_portal_screenshot.py`](src/take_portal_screenshot.py) | Python | 111 | Pipewire video stream frame grabber |
+| [`src/director.js`](src/director.js) | JavaScript | 109 | Autonomous Director supervisor loop |
+| [`src/approvalFlow.js`](src/approvalFlow.js) | JavaScript | 104 | User approval flow (auto / critical / manual) |
+| [`src/cleanup.js`](src/cleanup.js) | JavaScript | 103 | Cache directory hashing & worktree cleanup |
 
+**Total: 7,000+ lines of production code.** Zero mocks. Zero placeholders.
 </details>
+
+---
+
+## ⚡ The Hook: How to 100000000% Overutilise Swades in 30 Seconds
+
+> *"The Hook Model (Nir Eyal): Trigger $\rightarrow$ Action $\rightarrow$ Variable Reward $\rightarrow$ Investment. Build the habit of 10x engineering with zero friction."*
+
+Most developers use AI coding tools as glorified autocomplete. That is like using a rocket ship to go grocery shopping. **Here is how anyone can extract 100000000% maximum power out of Swades Agent:**
+
+```
+                  ┌───────────────────────────────┐
+                  │      1. THE TRIGGER           │
+                  │   Stuck, complex bug, boring  │
+                  │   migration, or missing tests │
+                  └───────────────┬───────────────┘
+                                  │
+                                  ▼
+┌───────────────────────────────┐   ┌───────────────────────────────┐
+│       4. THE INVESTMENT       │   │         2. THE ACTION         │
+│  4-layer memory gets smarter  │   │   Run 1 command: no choices,  │
+│  about your repo on every run │   │   zero friction, press Enter  │
+└───────────────────────────────┘   └───────────────┬───────────────┘
+                ▲                                   │
+                │         3. VARIABLE REWARD        ▼
+                └───────────────────────────────────┘
+                    1-25+ parallel agents, debate mode,
+                    auto quality gates, safety rollback
+```
+
+### Step 1: The Trigger (When to use it)
+Whenever you encounter any of these internal triggers:
+- 😤 **"I don't want to write tests for this 800-line module."**
+- 🤯 **"This refactor touches 15 files and I'm afraid of breaking imports."**
+- ⏳ **"Setting up this boilerplate / auth flow is going to take all afternoon."**
+- 🐛 **"A subtle bug is failing CI and I don't know which edge case broke it."**
+
+### Step 2: The Action (Zero Friction, 2 Seconds)
+Don't worry about picking an agent count, choosing a mode, or configuring flags. Just provide the task:
+
+```bash
+# Using free Groq for blazing-fast 300 tok/s execution:
+export GROQ_API_KEY=gsk_your_key_here
+swades-agent "Refactor auth to use JWT tokens, update all routes, and write full test coverage"
+```
+
+### Step 3: The Variable Reward (The Dopamine Hit)
+Sit back and watch Swades Agent execute what would take a human engineer 6 hours:
+1. **Adaptive Tier Scaling**: The AI evaluates the task and announces the tier (`TINY`, `NORMAL`, `BIG`, or `HUGE`) with the explicit architectural justification.
+2. **Conflict Prediction**: It maps your repo's file imports into a Directed Acyclic Graph (DAG) and locks files to eliminate edit conflicts before a single line is written.
+3. **Parallel Fleet**: Up to 25 isolated Git worktrees spin up in `/tmp`. Specialized **Architect**, **Implementer**, and **Test** agents work simultaneously.
+4. **Debate Mode**: If a patch changes high-risk code, a **Critic** agent attacks the code, and a **Fixer** agent hardens it.
+5. **Quality Gates & Auto-Rollback**: Automated test runners, linters, and compiler checks verify the merged output. If tests fail, it automatically rolls back your workspace.
+6. **Synthesis Report**: You get a complete breakdown of changed files, test stats, identified risks, and next steps.
+
+### Step 4: The Investment (It Gets Smarter Every Run)
+Swades' **4-Layer Persistent Memory** stores your project's stack, architectural patterns, user preferences, and agent performance into `~/.cache/swades/`. 
+- Every prompt you run trains Swades to better understand your specific repository conventions.
+- Your project root stays completely pristine.
 
 ---
 
 ## Key Capabilities
 
-- **ReAct agentic loop** — Thought → Tool Call → Observation → repeat until task is solved
-- **Zero-choice UX** — just type your task. Mode (normal / autonomous / CUA) is auto-detected by AI
-- **Real-time token streaming** — see the model's reasoning and tool arguments token-by-token as they arrive
-- **Multi-model fallback cascade** — automatically retries on rate limits (429), payment errors (402), and service outages with configurable fallback models
-- **Intelligent loop detection** — catches repetitive tool calls, blocks infinite index file reads, detects stagnation
-- **Stack-aware code generation** — auto-detects project language/framework (JS, Python, Rust, Go, Java) and generates matching code
-- **Repository cleanliness** — all agent metadata stored in `~/.cache/swades/`, never in your project root
-- **Partial file patching** — edits only the exact block that needs changing, not the entire file (saves tokens, preserves indentation)
-- **Automatic codebase indexing** — maps your repo structure (imports, exports, classes, functions) before starting
-- **Built-in syntax checker** — validates bracket matching, indentation consistency, `node --check` for JS, `py_compile` for Python
-- **24/7 Director mode** — a second "Director" model instance reviews progress after each run and writes the next subtask on behalf of the user
-- **Session memory** — persists a summary of each run and injects recent context into the next session
-- **Defensive coding** — all errors are logged, never silently swallowed
+- **Adaptive 1–25+ Agent Fleet** — No fixed subagent counts. Automatically scales from 1 agent (tiny tasks) up to 25+ agents (massive migrations), with AI justification for every tier.
+- **9-Phase Orchestrator Loop** — Replaces blind `Promise.all` with a managed lifecycle: Analyse $\rightarrow$ Plan $\rightarrow$ Approve $\rightarrow$ Assign $\rightarrow$ Monitor $\rightarrow$ Debate $\rightarrow$ Merge $\rightarrow$ Verify $\rightarrow$ Summarize.
+- **Native Groq Provider** — Automatic recognition of `GROQ_API_KEY` and Groq endpoints (`https://api.groq.com/openai/v1`) using `llama-3.3-70b-versatile` with `llama-3.1-8b-instant` fallback.
+- **File Dependency DAG & Conflict Prediction** — Maps imports/exports into a directed graph, calculates Kahn's topological order, and blocks overlapping file edits before conflicts can happen.
+- **4-Layer Persistent Memory** — Stores Project Architecture, User Preferences, Task History, and Agent Performance in cache. The agent remembers previous sessions and gets smarter with every run.
+- **Patch Safety System** — Stages all diffs before apply, scores risks (0–100), and performs automated `git apply` with 3-way merge and rollback fallbacks.
+- **Auto-Rollback on Test Failure** — Runs automated test commands post-patch; immediately reverts the workspace if tests break.
+- **Automated Quality Gates** — Auto-detects and runs linting (`eslint`, `ruff`), typechecking (`tsc`, `mypy`), unit tests (`jest`, `pytest`, `cargo test`), builds, and security audits.
+- **Debate Mode** — Pits an Implementer against an adversarial Critic and a Fixer to harden high-risk code changes.
+- **Approval Flow** — Asks once at startup for approval preference (`auto`, `critical`, or `manual`) and gates destructive operations (`rm -rf`, `npm install`, config edits).
+- **10 Specialized Agent Roles** — Planner, Architect, Implementer, Test, Review, Merge, Rollback, Critic, Fixer, and Synthesis (+ dynamic `custom:*` roles).
+- **ReAct agentic loop** — Thought $\rightarrow$ Tool Call $\rightarrow$ Observation $\rightarrow$ self-correction until verified complete.
+- **Repository cleanliness** — All agent metadata, caches, and worktrees stored in `~/.cache/swades/` and `/tmp/`, leaving project repositories 100% clean.
 
 ---
 
@@ -202,6 +269,10 @@ swades-agent "What's in this screenshot?" -i https://example.com/screenshot.png
 Create a `.env` file in your project root:
 
 ```env
+# Groq (Recommended — blazing fast 300+ tok/s)
+GROQ_API_KEY=gsk_your_key_here
+
+# Or OpenRouter (Default)
 API_KEY=sk-or-v1-your-key-here
 BASE_URL=https://openrouter.ai/api/v1
 MODEL=openrouter/free
@@ -214,9 +285,11 @@ FALLBACK_MODELS=nousresearch/deephermes-3-llama-3-8b-preview:free,deepseek/deeps
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `API_KEY` | Yes | — | Your LLM provider API key |
-| `BASE_URL` | No | `https://openrouter.ai/api/v1` | Provider base URL (change for OpenAI, Groq, Ollama, etc.) |
-| `MODEL` | No | `openrouter/free` | Model identifier string |
+| `GROQ_API_KEY` | If using Groq | — | Groq API Key (`https://console.groq.com/keys`) |
+| `API_KEY` | If not Groq | — | Primary LLM API key (OpenRouter, OpenAI, etc.) |
+| `OPENAI_API_KEY` | Optional | — | Dedicated OpenAI API key |
+| `BASE_URL` | No | Auto-detected | Provider base URL (auto-switches for Groq, OpenAI, Ollama) |
+| `MODEL` | No | Auto-detected | Model identifier (defaults to `llama-3.3-70b-versatile` on Groq, `openrouter/free` on OpenRouter) |
 | `FALLBACK_MODELS` | No | — | Comma-separated fallback model list for auto-failover on 429/402/403 |
 | `MAX_STEPS` | No | `∞` | Max tool-call iterations per agent run |
 | `MAX_OUTPUT_LENGTH` | No | `10000` | Character cap on tool output returned to the model |
@@ -225,17 +298,16 @@ FALLBACK_MODELS=nousresearch/deephermes-3-llama-3-8b-preview:free,deepseek/deeps
 **Using a different provider:**
 
 ```env
+# Groq (Fastest)
+GROQ_API_KEY=gsk_...
+# BASE_URL and MODEL are auto-configured to https://api.groq.com/openai/v1 and llama-3.3-70b-versatile!
+
 # OpenAI
-API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 BASE_URL=https://api.openai.com/v1
 MODEL=gpt-4o
 
-# Groq
-API_KEY=gsk_...
-BASE_URL=https://api.groq.com/openai/v1
-MODEL=llama-3.3-70b-versatile
-
-# Local Ollama
+# Local Ollama (100% Free & Offline)
 API_KEY=ollama
 BASE_URL=http://localhost:11434/v1
 MODEL=qwen2.5-coder:7b
@@ -245,7 +317,7 @@ MODEL=qwen2.5-coder:7b
 
 ## Tools
 
-The agent has access to 9 tools it can call during a run:
+The agent has access to 10 built-in tools it can call during an engineering run:
 
 | Tool | Arguments | Description |
 |---|---|---|
@@ -258,6 +330,7 @@ The agent has access to 9 tools it can call during a run:
 | `run_command` | `command`, `cwd?` | Executes a shell command with 30s timeout. |
 | `peek_terminal` | `action?` | Check background process output or terminate it. |
 | `extend_deadline` | `additional_seconds`, `reason` | Extend the task time limit if more time is needed. |
+| `report_progress` | `status`, `message`, `filesModified?` | Reports real-time status to the orchestrator loop monitor to prevent stuck detection. |
 
 **Automatic validation on every write:**
 
@@ -379,35 +452,47 @@ This feedback forces the model to self-correct, try alternative UI pathways, or 
 
 ```
 src/
-  index.js      CLI entry point — zero-choice UX, auto-detects mode, dispatches to agent/director/CUA
-  agent.js      ReAct loop — loop detection, stack detection, streaming LLM call, tool dispatch
-  director.js   Director loop — runs worker across cycles, reviews history, writes next subtask prompt
-  llm.js        OpenAI SDK wrapper — streaming, multi-model fallback cascade on 429/402/403
-  tools.js      9 tool implementations + heuristic syntax checker + codebase indexer + stack detection
-  prompts.js    System prompt + anti-loop rules + stack-aware guidance + tool schemas
-  memory.js     Session persistence in ~/.cache/swades/ (never in project root)
-  cleanup.js    Cache directory management, legacy file migration
-  subagent.js   Parallel subagent lifecycle with /tmp worktrees (never in project root)
-  orchestrator.js  Task complexity evaluation, subagent spawning, diff merging
-  simulator.js  Multi-scenario sandbox simulation engine
+  index.js            CLI entry point — zero-choice UX, auto-detects mode, startup approval flow
+  agent.js            ReAct loop — loop detection, stack detection, streaming LLM, checkpoint stashing
+  director.js         Director loop — autonomous multi-cycle supervisor across long horizons
+  llm.js              Multi-provider client (Groq, OpenRouter, OpenAI, Ollama) with fallback cascade
+  tools.js            10 tool implementations + heuristic syntax checker + codebase indexer + stack detection
+  prompts.js          System prompt + 10 role prompts (planner, architect, implementer, etc.) + tool schemas
+  orchestratorLoop.js Core 9-phase orchestrator loop (replaces blind Promise.all with managed lifecycle)
+  orchestrator.js     Adaptive 4-tier complexity classifier (Tiny, Normal, Big, Huge) & merge engine
+  dependencyGraph.js  Directed Acyclic Graph (DAG), Kahn's topological sort, conflict prediction, file locking
+  patchSafety.js      Staged patches, risk scoring (0–100), diff review, auto-rollback on test failure
+  qualityGates.js     Automated quality gates (lint, typecheck, unit-test, build, security scan)
+  approvalFlow.js     User confirmation gating (auto / critical / manual)
+  synthesis.js        Post-task reporting (summary, changed files, test stats, risks, next steps)
+  memory.js           4-layer persistent memory in ~/.cache/swades/ (never in project root)
+  cleanup.js          Cache directory management, legacy file migration, worktree pruning
+  subagent.js         Role-aware subagent lifecycle, debate mode, dynamic semaphore queue
+  simulator.js        Multi-scenario sandbox simulation engine
+  cua.js              Computer Use Agent Wayland / X11 desktop orchestrator
 ```
 
 **Single-run message flow:**
 ```
-index.js → migrate legacy files → index_codebase() → agent.js loop:
+index.js → migrate legacy files → index_codebase() → approval check → agent.js loop:
   [system + memory + stack + task] → LLM (streaming SSE)
     → text delta    → printed live to terminal
     → tool_call delta → loop check → executeTool() → observation → appended to messages
   repeat until LLM returns no tool calls → print final answer → exit
 ```
 
-**24/7 autonomous message flow:**
+**v4.0 Multi-Agent Orchestration flow:**
 ```
-director.js → cycle 1..N:
-  runAgent(messages)         ← worker resolves a subtask
-  callLLM(directorMessages)  ← director reviews history, writes next prompt
-  messages.push(nextPrompt)  ← appended as user turn, fed into next cycle
-  repeat until director outputs "STATUS: COMPLETE"
+orchestratorLoop.js (9 phases):
+  1. ANALYSE   → Build file dependency DAG from index, predict edit conflicts
+  2. PLAN      → Classify tier (Tiny / Normal / Big / Huge) & break down tasks with roles
+  3. APPROVE   → Gated checks for destructive edits or architecture shifts
+  4. ASSIGN    → Kahn's topological ordering spawns agents in dependency order
+  5. MONITOR   → Active polling loop, stuck agent timeout (>120s), unblock dependents
+  6. DEBATE    → Critic attacks high-risk patches, Fixer generates hardened diff
+  7. MERGE     → PatchSafety stages diffs and applies with 3-way merge fallback
+  8. VERIFY    → Quality gates execute unit tests, linters, and typechecks
+  9. SUMMARIZE → Synthesis report prints duration, risks, test passes, and next steps
 ```
 
 ---
@@ -416,81 +501,104 @@ director.js → cycle 1..N:
 
 - **Workspace isolation & self-hiding** — when installed as a subdirectory of the target project, the agent filters out its own folder from `list_dir` and `grep_search`. The model cannot see, read, or modify its own source files.
 - **Repository cleanliness** — all agent metadata (index, memory, terminal logs) stored in `~/.cache/swades/`, worktrees in `/tmp/`. Your project root stays 100% clean.
+- **Dependency Graph file locking** — prevents subagents from overwriting the same file simultaneously. Overlapping edits are predicted and serialized.
+- **Staged patch safety & auto-rollback** — all patches are staged in cache, assigned risk scores (0–100), and tested post-apply. If unit tests fail, the workspace is automatically rolled back.
 - **Loop detection** — blocks repeated identical tool calls, prevents index file re-reading, detects stagnation after 4 steps without file modifications.
-- **Multi-model fallback** — automatically retries on 429/402/403/503 with configurable fallback models instead of crashing.
-- **Dangerous command blocking** — shell commands matching `rm -rf`, `sudo`, `kill`, `dd if=`, `chmod 777`, `:(){`, and others pause execution and require an explicit `y` typed in the terminal before running.
+- **Stuck agent detection** — orchestrator loop polls subagent status and terminates agents that hang for $>120$ seconds without producing diffs.
+- **Dangerous command blocking** — shell commands matching `rm -rf`, `sudo`, `kill`, `dd if=`, `chmod 777`, `:(){`, and others pause execution and require explicit user confirmation.
 - **Step cap** — by default, the worker agent has NO step limit (`Infinity` steps), enabling execution of long-running or highly complex developer tasks. You can optionally cap it by setting `MAX_STEPS` in `.env`.
 - **Director cycle cap** — by default, the Director loop has NO cycle limit (`Infinity` cycles) to iteratively direct the worker agent until the overall goal is fully complete.
-- **Context Condensation** — uses OpenRouter's `context-compression` plugin to dynamically condense prompt histories when they approach context limits, preventing token overflows during long executions.
-- **Timeout** — `run_command` automatically times out after 30 seconds.
-- **Workspace scoping** — all file paths passed to tools are resolved relative to `WORKDIR`. The agent cannot access paths outside of it.
 - **Defensive coding** — all internal errors are logged with context, never silently swallowed.
 
 ---
 
-## Session Memory
+## 4-Layer Persistent Memory (v4.0)
 
-After each completed run, the agent appends a session record to `~/.cache/swades/<project>/agent_memory.json`:
+Unlike standard assistants that lose all context once closed, Swades Agent stores a **4-layer memory model** in `~/.cache/swades/<project>/agent_memory.json`:
 
-```json
-{
-  "timestamp": "2024-01-15T10:30:00Z",
-  "task": "Add input validation to the login form",
-  "summary": "Added email format check and password length validation in src/auth.js. Updated tests.",
-  "toolsUsed": ["read_file", "patch_file", "run_command"]
-}
+```
+┌────────────────────────────────────────────────────────┐
+│                   4-LAYER AGENT MEMORY                 │
+├─────────────────┬──────────────────────────────────────┤
+│ 1. Project      │ Tech stack, coding conventions,      │
+│                 │ architecture patterns, known issues  │
+├─────────────────┼──────────────────────────────────────┤
+│ 2. Preferences  │ Approval mode (auto/critical/manual) │
+│                 │ Preferred test & lint commands       │
+├─────────────────┼──────────────────────────────────────┤
+│ 3. Tasks        │ Rolling history of last 10 tasks,    │
+│                 │ summaries, and tools used            │
+├─────────────────┼──────────────────────────────────────┤
+│ 4. Performance  │ Success rates & duration per role,   │
+│                 │ model latencies, tier counters       │
+└─────────────────┴──────────────────────────────────────┘
 ```
 
-On the next run, the three most recent sessions are injected into the system prompt, giving the agent continuity between invocations without needing a long-running server.
+On subsequent runs, relevant memory context is injected into the system prompt. The more you use Swades on a repository, the better it understands your unique architectural patterns.
 
 ---
 
-## 🛠️ v3.0 Advanced Features: Subagents & Simulation (Step-by-Step)
+## 🛠️ v4.0 Advanced Features: Adaptive Multi-Agent Engine (Step-by-Step)
 
-Swades Agent v3.0 introduces a robust, enterprise-grade workflow for handling complex engineering tasks cleanly and safely. Here is how it works under the hood, step-by-step:
+Swades Agent v4.0 completely eliminates fixed 2–5 subagent limits in favor of a **purely adaptive, dependency-aware multi-agent architecture**:
 
-### Step 1: Automated Complexity Classification
-When you run a coding task, the orchestrator automatically evaluates it:
-* **LOW Complexity**: Simple edits, documentation tweaks, or single-file fixes. The worker agent runs directly in your workspace. **Zero overhead, no subagents spawned.**
-* **HIGH Complexity**: Multi-file refactors, new feature implementations, or large structural updates. The orchestrator triggers the parallel subagent and simulation pipelines.
+### Step 1: Adaptive Complexity Scaling (1 to 25+ Agents)
+When you submit a task, the classifier evaluates the codebase and assigns an appropriate tier:
+* **TINY (1 Agent)**: Single-file edits, bug fixes, quick commands, or documentation. Runs directly in the workspace with **zero orchestration overhead**.
+* **NORMAL (Planner + 2–4 Agents)**: Multi-file features, standard refactors, or adding test suites.
+* **BIG (Planner + 6–12 Agents)**: Cross-module features, major refactorings, or adding whole subsystems.
+* **HUGE (Planner + 12–25+ Agents)**: Full architecture overhauls and migrations. Every spawned agent is given a distinct task, role, and acceptance criteria.
 
-### Step 2: Isolated Parallel Subtask Spawning
-* The parent orchestrator breaks down the main task into 2 to 5 concrete subtasks.
-* It uses **Git Worktrees** in `/tmp/swades_worktrees/` to spin up isolated workspace directories.
-* Subagents run concurrently (up to 5 parallel processes, managed by a semaphore queue).
-* Since each subagent writes code in its own worktree, there is **zero risk of file corruption or dirty edits** during development.
+### Step 2: File Dependency DAG & Conflict Prediction
+Before launching parallel workers:
+* Swades parses imports/exports across the codebase into a Directed Acyclic Graph (DAG).
+* It calculates Kahn's topological sort order so dependency files are generated or modified before dependent files.
+* **Conflict Prediction**: Scans agent task targets and flags overlapping file claims, serializing them to prevent merge collisions.
 
-### Step 3: Git Rebase Alignment & Diff Merging
-* Once subagents complete their tasks, their changes are captured as code diff bundles.
-* The parent orchestrator merges the non-conflicting diffs back into your main workspace.
-* **Conflict Resolution**: If overlapping modifications cause git merge conflicts, a specialized **Merge-Resolution Subagent** is dynamically spawned to safely resolve the overlapping lines.
-* All temporary worktree sandboxes are pruned and deleted immediately.
+### Step 3: 10 Specialized Roles & Isolated Worktrees
+Subagents are assigned specialized roles with distinct prompts:
+* **Planner**: Deconstructs objectives and defines acceptance criteria.
+* **Architect**: Designs schemas, file layouts, and API contracts.
+* **Implementer**: Writes production-quality code.
+* **Test**: Generates comprehensive unit and integration tests.
+* **Review**: Audits diffs for security, style, and bug vectors.
+* **Merge**: Safely combines diffs and resolves conflicts.
+* **Rollback**: Restores previous safe states if quality checks fail.
+* **Critic & Fixer**: Powers Debate Mode for high-risk patches.
+* **Synthesis**: Assembles post-execution reports.
+* **Custom Roles**: Supports `custom:*` specifications (e.g. `custom:security-auditor`).
 
-### Step 4: Multi-Scenario Sandbox Simulation
-* Before committing simulated changes to real-life files, the Simulation Engine generates **2 to 4 alternative implementation scenarios** representing different architectural strategies.
-* Each scenario is run inside its own transient sandbox directory.
-* The engine compiles the code in each sandbox (verifying JS syntax with `node --check` and project builds with `package.json` scripts) and runs automated test suites.
-* The LLM reviews the results and selects the single **best-performing winner scenario** (based on diff cleanliness and compilation/test success).
+Each agent executes inside an isolated Git worktree under `/tmp/swades_worktrees/` to prevent dirty working tree pollution.
 
-### Step 5: The Promotion Pipeline (Sandbox to Real Life)
-Once a scenario is chosen, it goes through three safety gates:
-1. **Workspace Git Rebase Check**: Verifies the main repository hasn't moved forward. If it has, it performs an automatic non-destructive git rebase.
-2. **Shadow Verification**: Applies the winning diff to a clean temporary verification worktree and executes builds to guarantee 100% correctness.
-3. **Live Workspace Mutation**: Applies the verified diff to your active workspace, creating clean, compilation-passing modifications.
-4. **Telemetry Delta Report**: Generates simulation report showcasing simulated expectations vs. final verified real-life outcome.
+### Step 4: Debate Mode for High-Risk Patches
+When a generated patch scores a risk score $>60$ (touching config files, deleting files, or modifying critical paths):
+1. An adversarial **Critic** agent reviews the diff and identifies flaws, edge cases, or performance traps.
+2. A **Fixer** agent receives the original code along with the critique and generates a hardened, production-ready replacement.
+
+### Step 5: Patch Safety, Quality Gates & Auto-Rollback
+Once patches are ready:
+1. They are staged in `~/.cache/swades/staged_patches/` with risk scores.
+2. Applied sequentially in topological order with automated 3-way merge and git reverse fallbacks.
+3. Automated **Quality Gates** run project linters, typecheckers, and test suites.
+4. **Auto-Rollback**: If unit tests fail, Swades automatically reverts the workspace to its clean pre-task state.
+5. The **Synthesis Agent** outputs a terminal report detailing duration, files modified, tests passed, and remaining risks.
 
 ---
 
-## What's New in v2.0
+## What's New in v4.0
 
-* **Zero-Choice UX (v2.0)** — Eliminated user choice paralysis. Interactive mode asks only for the task; mode is auto-detected by AI. No more "choose mode" prompts.
-* **Multi-Model Fallback Cascade (v2.0)** — Automatic failover on 429 Rate Limit, 402 Payment Required, 403 Forbidden, and 503 Service Unavailable. Configure `FALLBACK_MODELS` in `.env`.
-* **Intelligent Loop Detection (v2.0)** — `LoopDetector` class catches repeated identical tool calls (3x threshold), blocks re-reading `.agent_index.json`, and detects stagnation (4+ steps without file modifications).
-* **Repository Cleanliness (v2.0)** — All metadata (`.agent_index.json`, `.agent_memory.json`, terminal logs) moved to `~/.cache/swades/`. Worktrees moved to `/tmp/swades_worktrees/`. Your project root stays 100% clean.
-* **Stack-Aware Code Generation (v2.0)** — Auto-detects project stack from `package.json`, `requirements.txt`, `Cargo.toml`, `go.mod`, `build.gradle`, etc. Injects language/runtime/framework context into the system prompt. Prevents cross-language subprocess spawns.
-* **Python Syntax Validation (v2.0)** — `py_compile` check on every `.py` file write, in addition to existing `node --check` for JS.
-* **Defensive Coding (v2.0)** — All bare `catch {}` blocks replaced with structured error logging. No more silently swallowed exceptions.
-* **Anti-Loop Prompt Rules (v2.0)** — System prompt now includes explicit anti-loop and stack-awareness rules to prevent the agent from getting trapped.
+* **Adaptive 1–25+ Agent Scaling (v4.0)** — Dynamic agent allocation scaling from 1 solo agent (tiny tasks) to 25+ parallel agents (huge migrations) with AI-reasoned justification.
+* **9-Phase Orchestrator Loop (v4.0)** — Replaced blind `Promise.all` with a full lifecycle: Analyse $\rightarrow$ Plan $\rightarrow$ Approve $\rightarrow$ Assign $\rightarrow$ Monitor $\rightarrow$ Debate $\rightarrow$ Merge $\rightarrow$ Verify $\rightarrow$ Summarize.
+* **Native Groq Provider Support (v4.0)** — Auto-detects `GROQ_API_KEY` and Groq API endpoints. Defaults to `llama-3.3-70b-versatile` at 300+ tok/s with fallback to `llama-3.1-8b-instant`.
+* **File Dependency DAG (v4.0)** — Automatic import/export graph extraction, Kahn's topological sorting, transitive impact analysis (`getImpactedFiles`), and atomic file locking.
+* **Conflict Prediction Engine (v4.0)** — Detects overlapping file targets across subagents before code generation begins.
+* **4-Layer Persistent Memory (v4.0)** — Project Architecture, User Preferences, Task History, and Agent Performance tracking stored in `~/.cache/swades/`.
+* **Patch Safety & Auto-Rollback (v4.0)** — Unified diff parsing, 0–100 risk scoring, staged patch caching, and automated Git workspace rollback if test suites fail.
+* **Automated Quality Gates (v4.0)** — Auto-detects and runs linting (`eslint`, `ruff`), typechecking (`tsc`, `mypy`), tests, and builds.
+* **Debate Mode (v4.0)** — Proposer $\rightarrow$ Critic $\rightarrow$ Fixer cycle for hardening high-risk patches.
+* **10 Specialized Roles (v4.0)** — Dedicated system prompts for Planner, Architect, Implementer, Test, Review, Merge, Rollback, Critic, Fixer, and Synthesis.
+* **Synthesis Agent (v4.0)** — Structured post-task reporting with risk analysis, test counts, changed file tables, and next steps.
+* **Stuck Agent Watchdog (v4.0)** — Actively monitors subagent execution times; flags and cancels stuck processes after 120s.
 
 ### Previous Releases
 
@@ -506,6 +614,14 @@ Once a scenario is chosen, it goes through three safety gates:
 * **Native Wayland GUI Support (v2.1)** — native desktop input simulation (clicking, typing, scrolling, dragging) via GNOME Mutter RemoteDesktop and ScreenCast DBus APIs. No X11 dependencies.
 * **Anti-Loop Click Protection (v2.1)** — automatic consecutive and overall frequency limits on spatial clicks (using a 25px x 15px bounding box) to prevent looping click sequences.
 * **JSON System Instructions (v2.1)** — system prompt structured as a clean, high-compliance JSON schema to enforce reasoning/ReAct rules.
+* **Zero-Choice UX (v2.0)** — Eliminated user choice paralysis. Interactive mode asks only for the task; mode is auto-detected by AI. No more "choose mode" prompts.
+* **Multi-Model Fallback Cascade (v2.0)** — Automatic failover on 429 Rate Limit, 402 Payment Required, 403 Forbidden, and 503 Service Unavailable. Configure `FALLBACK_MODELS` in `.env`.
+* **Intelligent Loop Detection (v2.0)** — `LoopDetector` class catches repeated identical tool calls (3x threshold), blocks re-reading `.agent_index.json`, and detects stagnation (4+ steps without file modifications).
+* **Repository Cleanliness (v2.0)** — All metadata (`.agent_index.json`, `.agent_memory.json`, terminal logs) moved to `~/.cache/swades/`. Worktrees moved to `/tmp/swades_worktrees/`. Your project root stays 100% clean.
+* **Stack-Aware Code Generation (v2.0)** — Auto-detects project stack from `package.json`, `requirements.txt`, `Cargo.toml`, `go.mod`, `build.gradle`, etc. Injects language/runtime/framework context into the system prompt. Prevents cross-language subprocess spawns.
+* **Python Syntax Validation (v2.0)** — `py_compile` check on every `.py` file write, in addition to existing `node --check` for JS.
+* **Defensive Coding (v2.0)** — All bare `catch {}` blocks replaced with structured error logging. No more silently swallowed exceptions.
+* **Anti-Loop Prompt Rules (v2.0)** — System prompt now includes explicit anti-loop and stack-awareness rules to prevent the agent from getting trapped.
 * **24/7 Director Loop (v2.0)** — autonomous multi-cycle execution with a supervising Director model. Pass `--autonomous` to any task.
 * **Codebase Indexing (v2.0)** — automatic `index_codebase` run at startup generates codebase index with the full repository structure so the model starts with deep context.
 * **Partial File Patching (v2.0)** — `patch_file` tool for surgical block-level edits. Preserves exact indentation. Saves significant tokens vs. full-file rewrites.

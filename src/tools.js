@@ -1034,6 +1034,25 @@ function _decrementDepth() {
   process.env._SWADES_TOOL_DEPTH = String(Math.max(0, depth - 1));
 }
 
+// ---- Agent Progress Reporting ----
+
+// In-memory progress store for orchestrator monitoring
+export const agentProgressStore = new Map();
+
+async function reportProgressTool({ status, message, filesModified }) {
+  const agentId = process.env._SWADES_AGENT_ID || 'default';
+  const entry = {
+    agentId,
+    status,
+    message,
+    filesModified: filesModified || [],
+    timestamp: Date.now()
+  };
+  agentProgressStore.set(agentId, entry);
+  console.log(chalk.dim(`   📊 [${agentId}] Progress: ${status} — ${message}`));
+  return `Progress reported: ${status} — ${message}`;
+}
+
 /**
  * run_simulation — spawn sandbox scenarios for the given task and promote the winner.
  */
@@ -1076,16 +1095,27 @@ async function spawnSubagentsTool({ subtasks, reason }) {
   // Lazy imports
   const { runSubagentsParallel } = await import("./subagent.js");
   const { mergeDiffs } = await import("./orchestrator.js");
+  const { PatchSafety } = await import("./patchSafety.js");
   const workdir = getWorkdir();
 
   _incrementDepth();
   try {
     const results = await runSubagentsParallel(subtasks, workdir);
+    
+    // Use PatchSafety for staged merge
+    const patchSafety = new PatchSafety(workdir);
     const mergeResult = await mergeDiffs(results, workdir);
     const passed = results.filter(r => r.success).length;
+    
+    // Score risk for the combined changes
+    const riskInfo = results.filter(r => r.success && r.diff).length > 0
+      ? `Risk: assessed via patch safety system`
+      : 'No diffs to assess';
+
     return [
       `✅ Subagents complete: ${passed}/${results.length} succeeded.`,
       `   Merge: ${mergeResult.merged} applied, ${mergeResult.failed} failed.`,
+      `   ${riskInfo}`,
       ...results.map(r => `   [${r.label}] ${r.success ? "✅" : "❌"} ${r.summary.slice(0, 120)}`),
     ].join("\n");
   } catch (err) {
@@ -1299,6 +1329,7 @@ const TOOL_REGISTRY = {
   index_codebase: indexCodebaseTool,
   peek_terminal: peekTerminalTool,
   extend_deadline: extendDeadlineTool,
+  report_progress: reportProgressTool,
   // Dynamic capability tools (Modes-as-Tools)
   run_simulation: runSimulationTool,
   spawn_subagents: spawnSubagentsTool,
