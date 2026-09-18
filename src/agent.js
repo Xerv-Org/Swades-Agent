@@ -33,9 +33,12 @@ class LoopDetector {
     this.history = [];          // [{name, argsHash, step}]
     this.stagnantSteps = 0;     // consecutive steps without file changes
     this.indexReads = 0;        // times .agent_index.json was read
-    this.MAX_REPEAT = 3;        // max identical consecutive calls
+    this.MAX_REPEAT = 3;        // max identical consecutive calls before first warning
     this.MAX_STAGNANT = 4;      // max steps without progress
     this.MAX_INDEX_READS = 1;   // max times to re-read the index file
+    // Track last blocked {name, argsHash} and how many times it was blocked
+    this._lastBlock = null;
+    this._blockCount = 0;
   }
 
   /**
@@ -63,14 +66,32 @@ class LoopDetector {
       }
     }
 
-    // ---- Check 2: Detect identical consecutive calls ----
+    // ---- Check 2: Detect identical consecutive calls — escalating severity ----
     if (this.history.length >= this.MAX_REPEAT) {
       const recent = this.history.slice(-this.MAX_REPEAT);
       const allSame = recent.every(
         (call) => call.name === recent[0].name && call.argsHash === recent[0].argsHash
       );
       if (allSame) {
+        // Track how many consecutive times THIS exact call has been blocked
+        const key = `${name}:${argsHash}`;
+        if (this._lastBlock === key) {
+          this._blockCount++;
+        } else {
+          this._lastBlock = key;
+          this._blockCount = 1;
+        }
+
+        if (this._blockCount >= 2) {
+          // CRITICAL escalation — model is ignoring soft warnings
+          return `🚨 [CRITICAL LOOP — HARD STOP] You have been blocked ${this._blockCount} consecutive times calling '${name}' with the same arguments. This call will NEVER succeed while you repeat it. YOU MUST call a completely different tool right now. Suggested next action: call run_command with {"command":"ls -la src/ && cat src/server.js | head -20"} to re-orient yourself, then proceed with writing the actual implementation code.`;
+        }
+
         return `⚠️ [LOOP DETECTED] You have called '${name}' with identical arguments ${this.MAX_REPEAT} times in a row. This is unproductive. Change your strategy: try a different file, tool, or approach. If you're stuck, explain what's blocking you and call a different tool.`;
+      } else {
+        // Different call — reset block tracking
+        this._lastBlock = null;
+        this._blockCount = 0;
       }
     }
 
