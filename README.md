@@ -36,32 +36,59 @@ It works natively with **Groq** (`llama-3.3-70b-versatile` at 300+ tok/s), **Ope
 No GUI required. No cloud lock-in. No build step. **Zero configuration choices at runtime — describe what you need and watch it build.**
 
 <details>
-<summary><b>📊 Codebase Line Count Breakdown (v4.0 Architecture)</b></summary>
+<summary><b>📊 Codebase Line Count Breakdown & Distribution (v4.0 Architecture)</b></summary>
+
+### Production Source Files (`src/`)
 
 | File | Language | Lines of Code | Description |
 | :--- | :--- | :---: | :--- |
-| [`src/tools.js`](src/tools.js) | JavaScript | 1,357 | 15 tool implementations, syntax checker, stack detection, shell runner |
-| [`src/cua_helper.py`](src/cua_helper.py) | Python | 768 | GNOME Mutter RDP/ScreenCast Wayland automation helper |
-| [`src/cua.js`](src/cua.js) | JavaScript | 596 | Computer Use Agent desktop orchestrator |
-| [`src/simulator.js`](src/simulator.js) | JavaScript | 537 | Multi-scenario sandbox simulation engine |
-| [`src/agent.js`](src/agent.js) | JavaScript | 490 | Core ReAct agentic loop, loop detector, checkpoint stashing |
-| [`src/prompts.js`](src/prompts.js) | JavaScript | 335 | System prompt, 10 specialized role prompts, tool schemas |
-| [`src/index.js`](src/index.js) | JavaScript | 311 | CLI entry point, argument parser, persistent chat loop |
-| [`src/subagent.js`](src/subagent.js) | JavaScript | 309 | Subagent worktree lifecycle, debate mode, dynamic semaphore queue |
-| [`src/orchestratorLoop.js`](src/orchestratorLoop.js) | JavaScript | 306 | Core 9-phase orchestrator loop (Analyse → Plan → Approve → Assign → Monitor → Debate → Merge → Verify → Summarize) |
-| [`src/patchSafety.js`](src/patchSafety.js) | JavaScript | 291 | Staged patches, risk scoring (0–100), diff review, auto-rollback on test failure |
-| [`src/llm.js`](src/llm.js) | JavaScript | 273 | Multi-provider client (Groq, OpenRouter, OpenAI, Ollama), streaming, fallback cascade |
-| [`src/memory.js`](src/memory.js) | JavaScript | 251 | 4-layer persistent memory (Project, Preferences, Tasks, Performance) |
-| [`src/orchestrator.js`](src/orchestrator.js) | JavaScript | 223 | Adaptive 4-tier complexity classifier (Tiny, Normal, Big, Huge) & merge engine |
-| [`src/dependencyGraph.js`](src/dependencyGraph.js) | JavaScript | 218 | File dependency DAG, Kahn's topological sort, conflict prediction, file locking |
-| [`src/qualityGates.js`](src/qualityGates.js) | JavaScript | 140 | Automated quality gates (lint, typecheck, test, build, audit) |
-| [`src/synthesis.js`](src/synthesis.js) | JavaScript | 152 | Post-task report generator (summary, risks, tests, next steps, telemetry) |
-| [`src/take_portal_screenshot.py`](src/take_portal_screenshot.py) | Python | 111 | Pipewire video stream frame grabber |
-| [`src/director.js`](src/director.js) | JavaScript | 109 | Autonomous Director supervisor loop |
-| [`src/approvalFlow.js`](src/approvalFlow.js) | JavaScript | 104 | User approval flow (auto / critical / manual) |
-| [`src/cleanup.js`](src/cleanup.js) | JavaScript | 103 | Cache directory hashing & worktree cleanup |
+| [`src/tools.js`](src/tools.js) | JavaScript | 1,557 | 15 tool implementations, 4-tier fuzzy patch engine, syntax validator, stack detection |
+| [`src/cua_helper.py`](src/cua_helper.py) | Python | 769 | GNOME Mutter RDP/ScreenCast Wayland automation helper |
+| [`src/cua.js`](src/cua.js) | JavaScript | 597 | Computer Use Agent desktop orchestrator |
+| [`src/agent.js`](src/agent.js) | JavaScript | 592 | Core ReAct agentic loop, loop detector, plain-text Search/Replace parser, checkpoint stashing |
+| [`src/simulator.js`](src/simulator.js) | JavaScript | 538 | Multi-scenario sandbox simulation engine |
+| [`src/prompts.js`](src/prompts.js) | JavaScript | 343 | System prompt, 10 specialized role prompts, tool schemas, diff guides |
+| [`src/index.js`](src/index.js) | JavaScript | 312 | CLI entry point, argument parser, approval mode setup, persistent chat loop |
+| [`src/subagent.js`](src/subagent.js) | JavaScript | 310 | Subagent worktree lifecycle, debate mode, dynamic semaphore queue |
+| [`src/orchestratorLoop.js`](src/orchestratorLoop.js) | JavaScript | 307 | Core 9-phase orchestrator loop (Analyse → Plan → Approve → Assign → Monitor → Debate → Merge → Verify → Summarize) |
+| [`src/llm.js`](src/llm.js) | JavaScript | 302 | Multi-provider client (Groq, OpenRouter, OpenAI, Ollama), message sanitizer, fallback cascade |
+| [`src/patchSafety.js`](src/patchSafety.js) | JavaScript | 292 | Staged patches, risk scoring (0–100), diff review, auto-rollback on test failure |
+| [`src/memory.js`](src/memory.js) | JavaScript | 252 | 4-layer persistent memory (Project, Preferences, Tasks, Performance) |
+| [`src/orchestrator.js`](src/orchestrator.js) | JavaScript | 224 | Adaptive 4-tier complexity classifier (Tiny, Normal, Big, Huge) & merge engine |
+| [`src/dependencyGraph.js`](src/dependencyGraph.js) | JavaScript | 219 | File dependency DAG, Kahn's topological sort, conflict prediction, file locking |
+| [`src/synthesis.js`](src/synthesis.js) | JavaScript | 153 | Post-task report generator (summary, risks, tests, next steps, telemetry) |
+| [`src/qualityGates.js`](src/qualityGates.js) | JavaScript | 141 | Automated quality gates (lint, typecheck, test, build, audit) |
+| [`src/take_portal_screenshot.py`](src/take_portal_screenshot.py) | Python | 112 | Pipewire video stream frame grabber |
+| [`src/director.js`](src/director.js) | JavaScript | 110 | Autonomous Director supervisor loop |
+| [`src/approvalFlow.js`](src/approvalFlow.js) | JavaScript | 105 | User approval flow (auto / critical / manual) |
+| [`src/cleanup.js`](src/cleanup.js) | JavaScript | 104 | Cache directory hashing & worktree cleanup |
+| [`src/extension.js`](src/extension.js) | JavaScript | 77 | VS Code extension activation and terminal bridge |
+| [`src/prepare-package.js`](src/prepare-package.js) | JavaScript | 40 | Packaging prep script for npm and VS Code Marketplace (vsce/ovsx) |
 
-**Total: 7,000+ lines of production code.** Zero mocks. Zero placeholders.
+---
+
+### 📈 Distribution of Code by Architectural Layer
+
+| Architectural Layer | Files | Total Lines | Pure Code | % of Engine |
+| :--- | :---: | :---: | :---: | :---: |
+| **Tools & Execution Engine** (`tools.js`, `patchSafety.js`, `qualityGates.js`) | 3 | 1,990 | 1,584 | 26.7% |
+| **Computer Use Agent & Automation** (`cua_helper.py`, `cua.js`, `take_portal_screenshot.py`) | 3 | 1,478 | 1,299 | 19.8% |
+| **Agentic Core & Loops** (`agent.js`, `orchestratorLoop.js`, `director.js`, `index.js`) | 4 | 1,321 | 981 | 17.7% |
+| **Multi-Agent Orchestration** (`subagent.js`, `orchestrator.js`, `dependencyGraph.js`, `simulator.js`) | 4 | 1,291 | 936 | 17.3% |
+| **AI Client, Memory & Prompts** (`llm.js`, `memory.js`, `prompts.js`) | 3 | 897 | 688 | 12.0% |
+| **Supervisor & Distribution** (`synthesis.js`, `approvalFlow.js`, `cleanup.js`, `extension.js`, `prepare-package.js`) | 5 | 479 | 349 | 6.5% |
+| **Total Production Code (`src/`)** | **22** | **7,456** | **5,837** | **100%** |
+
+### 🌐 Language Breakdown (All Repositories & IDE Plugins)
+
+| Language | Files | Lines of Code | Pure Code | % of Codebase |
+| :--- | :---: | :---: | :---: | :---: |
+| **JavaScript (ES Modules)** | 21 | 6,591 | 5,099 | 87.2% |
+| **Python** | 2 | 881 | 752 | 11.7% |
+| **Java & Kotlin (IntelliJ Plugin)** | 3 | 88 | 70 | 1.2% |
+| **Total Code across Repository** | **26** | **7,560** | **5,921** | **100%** |
+
+*Zero mocks. Zero placeholders. 100% production code.*
 </details>
 
 ---
