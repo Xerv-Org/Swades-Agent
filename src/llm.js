@@ -179,6 +179,11 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
     params.plugins = [{ id: "context-compression" }];
   }
 
+  // Groq's qwen3.8-27b has a strict 1000 OTPM limit; default 2048 causes immediate 429
+  if (PROVIDER === "groq" && model.includes("qwen3.8-27b")) {
+    params.max_tokens = 950;
+  }
+
   if (tools && tools.length > 0) {
     params.tools = tools;
     params.tool_choice = "auto";

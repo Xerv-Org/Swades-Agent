@@ -406,16 +406,20 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       const status = err.status || err.statusCode || 0;
       const msg = (err.message || "").toLowerCase();
 
+      // ---- Rate limits (HTTP 429) — transient, never fatal ----
+      const isRateLimit = status === 429 || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("otpm") || msg.includes("tpm");
+
       // ---- Fatal errors — abort immediately, never retry ----
-      // These will never succeed no matter how many times we retry:
       //   404 = model not found / access denied for this key
       //   401 = invalid API key
       //   400 = malformed request (bad message structure, unsupported field)
-      const isFatal =
-        status === 404 || msg.includes("does not exist") || msg.includes("404") ||
-        status === 401 || msg.includes("invalid api key") || msg.includes("401") ||
-        status === 413 || msg.includes("request too large") || msg.includes("413") ||
-        (status === 400 && !msg.includes("rate") && !msg.includes("context_length"));
+      //   413 = payload too large (permanent context overflow)
+      const isFatal = !isRateLimit && (
+        status === 404 || msg.includes("does not exist") ||
+        status === 401 || msg.includes("invalid api key") ||
+        status === 413 ||
+        (status === 400 && !msg.includes("rate") && !msg.includes("context_length"))
+      );
 
       if (isFatal) {
         console.log(chalk.red(`\n   💀 [FATAL ERROR — ABORTING] ${err.message}`));
@@ -423,9 +427,17 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
         return `Fatal LLM error (status ${status}): ${err.message}`;
       }
 
-      // Transient errors (rate limits, timeouts, 503) — retry next step
+      // Transient errors (rate limits, timeouts, 503) — backoff and retry next step
       console.log(chalk.red(`\n   ❌ ${err.message}`));
-      if (step < max) { console.log(chalk.yellow("   Retrying...\n")); continue; }
+      if (step < max) {
+        if (isRateLimit) {
+          console.log(chalk.yellow("   ⏳ Rate limit reached. Backing off 10s before retry...\n"));
+          await new Promise(r => setTimeout(r, 10000));
+        } else {
+          console.log(chalk.yellow("   Retrying...\n"));
+        }
+        continue;
+      }
       return `Agent error: ${err.message}`;
     }
 
