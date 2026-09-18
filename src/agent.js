@@ -403,6 +403,26 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       });
       console.log();
     } catch (err) {
+      const status = err.status || err.statusCode || 0;
+      const msg = (err.message || "").toLowerCase();
+
+      // ---- Fatal errors — abort immediately, never retry ----
+      // These will never succeed no matter how many times we retry:
+      //   404 = model not found / access denied for this key
+      //   401 = invalid API key
+      //   400 = malformed request (bad message structure, unsupported field)
+      const isFatal =
+        status === 404 || msg.includes("does not exist") || msg.includes("404") ||
+        status === 401 || msg.includes("invalid api key") || msg.includes("401") ||
+        (status === 400 && !msg.includes("rate") && !msg.includes("context_length"));
+
+      if (isFatal) {
+        console.log(chalk.red(`\n   💀 [FATAL ERROR — ABORTING] ${err.message}`));
+        console.log(chalk.red(`   This error will not resolve by retrying. Check your MODEL and API_KEY settings.`));
+        return `Fatal LLM error (status ${status}): ${err.message}`;
+      }
+
+      // Transient errors (rate limits, timeouts, 503) — retry next step
       console.log(chalk.red(`\n   ❌ ${err.message}`));
       if (step < max) { console.log(chalk.yellow("   Retrying...\n")); continue; }
       return `Agent error: ${err.message}`;
