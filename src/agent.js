@@ -443,7 +443,48 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
 
     messages.push(response);
 
-    // No tool calls → final answer
+    // Check if assistant provided plain-text Search/Replace blocks in response content
+    const searchReplaceRegex = /(?:^|\n)(?:###?\s*(?:File:\s*)?|File:\s*)?`?([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)`?\s*\n<{5,9}\s*SEARCH\r?\n([\s\S]*?)(?:^|\n)={5,9}\r?\n([\s\S]*?)(?:^|\n)>{5,9}\s*REPLACE/gm;
+    const detectedBlocks = [];
+    if (!response.tool_calls?.length && response.content) {
+      let m;
+      while ((m = searchReplaceRegex.exec(response.content)) !== null) {
+        detectedBlocks.push({ path: m[1].trim(), target: m[2], replacement: m[3] });
+      }
+    }
+
+    if (detectedBlocks.length > 0) {
+      console.log(chalk.cyan(`\n   ⚡ Detected ${detectedBlocks.length} plain-text Search/Replace block(s). Applying autonomously...`));
+      for (const block of detectedBlocks) {
+        toolsUsed.add("patch_file");
+        // Git checkpoint before mutation
+        if (lastCheckpointStep !== step) {
+          lastCheckpointStep = step;
+          try {
+            const stashHash = await shell("git stash create", resolvedWorkdir);
+            if (stashHash) {
+              checkpointStore.push({
+                step,
+                stashHash,
+                messagesSnapshot: JSON.parse(JSON.stringify(messages)),
+                timestamp: Date.now()
+              });
+              console.log(chalk.gray(`   💾 Checkpoint saved: step ${step} (stash: ${stashHash.slice(0, 8)})`));
+            }
+          } catch (_) {}
+        }
+        console.log(chalk.magenta(`   → patch_file (Search/Replace): ${block.path}`));
+        const patchResult = await executeTool("patch_file", block);
+        console.log(chalk.gray(`   ${patchResult.split("\n")[0]}`));
+        messages.push({
+          role: "user",
+          content: `Applied Search/Replace block to ${block.path}:\n${patchResult}`
+        });
+      }
+      continue;
+    }
+
+    // No tool calls and no diff blocks → final answer
     if (!response.tool_calls?.length) {
       const answer = response.content || "(no response)";
       console.log(chalk.green("\n💬 Answer:\n"));

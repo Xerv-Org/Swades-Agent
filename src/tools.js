@@ -682,32 +682,230 @@ async function writeFileTool({ path, content }) {
   return report;
 }
 
-async function patchFileTool({ path, target, replacement }) {
+/**
+ * Advanced Multi-Tier Fuzzy Patch Engine
+ * Matches code blocks even with indentation deltas, trailing whitespace differences,
+ * or minor boundary line drift.
+ */
+export function findFuzzyMatch(content, target) {
+  const cleanStr = (s) => (s || "").replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "");
+  const normContent = cleanStr(content);
+  const normTarget = cleanStr(target);
+
+  if (!normTarget || normTarget.trim() === "") {
+    return { matched: false, error: "empty_target" };
+  }
+
+  // Strategy 1: Exact substring match (fast path)
+  const exactIdx = normContent.indexOf(normTarget);
+  if (exactIdx !== -1) {
+    const isUnique = normContent.lastIndexOf(normTarget) === exactIdx;
+    if (isUnique) {
+      return {
+        matched: true,
+        matchType: "exact",
+        startIdx: exactIdx,
+        endIdx: exactIdx + normTarget.length,
+        matchedText: normContent.slice(exactIdx, exactIdx + normTarget.length),
+      };
+    }
+    return { matched: false, error: "multiple_matches", count: normContent.split(normTarget).length - 1 };
+  }
+
+  // Strategy 2: Line-by-line whitespace & indentation flexible matching
+  const cLines = normContent.split("\n");
+  const tLines = normTarget.split("\n");
+  const tTrimmed = tLines.map(l => l.trim());
+
+  let tStart = 0;
+  while (tStart < tTrimmed.length && tTrimmed[tStart] === "") tStart++;
+  let tEnd = tTrimmed.length - 1;
+  while (tEnd >= 0 && tTrimmed[tEnd] === "") tEnd--;
+
+  const effectiveTLines = tTrimmed.slice(tStart, tEnd + 1);
+  if (effectiveTLines.length === 0) {
+    return { matched: false, error: "empty_target" };
+  }
+
+  const findLineMatches = (linesToMatch) => {
+    const matches = [];
+    for (let i = 0; i <= cLines.length - linesToMatch.length; i++) {
+      let ok = true;
+      for (let j = 0; j < linesToMatch.length; j++) {
+        if (cLines[i + j].trim() !== linesToMatch[j]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) matches.push(i);
+    }
+    return matches;
+  };
+
+  const getCharOffsets = (startLine, endLine) => {
+    let curChar = 0, startIdx = 0, endIdx = 0;
+    for (let i = 0; i < cLines.length; i++) {
+      if (i === startLine) startIdx = curChar;
+      if (i === endLine) {
+        endIdx = curChar + cLines[i].length;
+        break;
+      }
+      curChar += cLines[i].length + 1;
+    }
+    return { startIdx, endIdx };
+  };
+
+  // Check full effective target lines
+  const fullMatches = findLineMatches(effectiveTLines);
+  if (fullMatches.length === 1) {
+    const { startIdx, endIdx } = getCharOffsets(fullMatches[0], fullMatches[0] + effectiveTLines.length - 1);
+    return {
+      matched: true,
+      matchType: "fuzzy_indentation",
+      startIdx,
+      endIdx,
+      matchedText: normContent.slice(startIdx, endIdx),
+    };
+  } else if (fullMatches.length > 1) {
+    return { matched: false, error: "multiple_matches", count: fullMatches.length };
+  }
+
+  // Strategy 3: Boundary-trim match (if target >= 3 lines, tolerate 1 drifted boundary line)
+  if (effectiveTLines.length >= 3) {
+    const withoutFirst = effectiveTLines.slice(1);
+    const m1 = findLineMatches(withoutFirst);
+    if (m1.length === 1) {
+      const { startIdx, endIdx } = getCharOffsets(m1[0], m1[0] + withoutFirst.length - 1);
+      return {
+        matched: true,
+        matchType: "fuzzy_boundary_trimmed",
+        startIdx,
+        endIdx,
+        matchedText: normContent.slice(startIdx, endIdx),
+      };
+    }
+
+    const withoutLast = effectiveTLines.slice(0, -1);
+    const m2 = findLineMatches(withoutLast);
+    if (m2.length === 1) {
+      const { startIdx, endIdx } = getCharOffsets(m2[0], m2[0] + withoutLast.length - 1);
+      return {
+        matched: true,
+        matchType: "fuzzy_boundary_trimmed",
+        startIdx,
+        endIdx,
+        matchedText: normContent.slice(startIdx, endIdx),
+      };
+    }
+  }
+
+  // Strategy 4: Non-whitespace character projection (bridges single-line vs multi-line formatting differences)
+  const targetChars = normTarget.replace(/\s+/g, "");
+  if (targetChars.length > 0) {
+    let strippedContent = "";
+    const contentIndices = [];
+    for (let i = 0; i < normContent.length; i++) {
+      if (!/\s/.test(normContent[i])) {
+        contentIndices.push(i);
+        strippedContent += normContent[i];
+      }
+    }
+
+    const idx = strippedContent.indexOf(targetChars);
+    if (idx !== -1) {
+      const isUnique = strippedContent.lastIndexOf(targetChars) === idx;
+      if (isUnique) {
+        const startIdx = contentIndices[idx];
+        const endIdx = contentIndices[idx + targetChars.length - 1] + 1;
+        return {
+          matched: true,
+          matchType: "token_collapsed",
+          startIdx,
+          endIdx,
+          matchedText: normContent.slice(startIdx, endIdx)
+        };
+      }
+      return { matched: false, error: "multiple_matches", count: 2 };
+    }
+  }
+
+  return { matched: false, error: "not_found" };
+}
+
+/**
+ * Extract Aider-style search/replace block from a string if present.
+ */
+function extractSearchReplaceBlock(str) {
+  if (!str || typeof str !== "string") return null;
+  const match = str.match(/<{5,9}\s*SEARCH\r?\n([\s\S]*?)(?:^|\n)={5,9}\r?\n([\s\S]*?)(?:^|\n)>{5,9}\s*REPLACE/m);
+  if (match) {
+    return { search: match[1], replace: match[2] };
+  }
+  return null;
+}
+
+export async function patchFileTool({ path, target, replacement }) {
   const fullPath = resolvePath(path);
+
+  // Check if target or replacement has an embedded Aider search/replace block
+  const embeddedTarget = extractSearchReplaceBlock(target);
+  const embeddedReplacement = extractSearchReplaceBlock(replacement);
+  if (embeddedTarget) {
+    target = embeddedTarget.search;
+    replacement = embeddedTarget.replace;
+  } else if (embeddedReplacement) {
+    target = embeddedReplacement.search;
+    replacement = embeddedReplacement.replace;
+  }
+
+  // Auto-creation: if file does not exist, create it with replacement content
   if (!existsSync(fullPath)) {
-    return `❌ Error: File does not exist at path: ${path}. Use write_file to create new files.`;
+    await mkdir(dirname(fullPath), { recursive: true });
+    const fileContent = replacement || "";
+    await writeFile(fullPath, fileContent, "utf-8");
+    _updateIndexForFile(fullPath, fileContent).catch(() => {});
+    const validation = await performPostWriteValidation(fullPath, fileContent);
+    let report = `✅ File created successfully via patch: ${path} (${fileContent.length} bytes)`;
+    if (validation.errors.length > 0) {
+      report += `\n\n❌ WARNING: SYNTAX ERRORS DETECTED:\n- ` + validation.errors.join("\n- ");
+    }
+    return report;
   }
 
   const content = await readFile(fullPath, "utf-8");
-  
-  // Normalize line endings and trim trailing spaces for robust matching
-  const normalize = (str) => str.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "");
-  const normalizedContent = normalize(content);
-  const normalizedTarget = normalize(target);
-  
-  const occurrences = normalizedContent.split(normalizedTarget).length - 1;
-  
-  if (occurrences === 0) {
-    return `❌ Error: Target block not found in the file. Ensure your 'target' content matches the file EXACTLY (including indentation and casing).`;
-  }
-  if (occurrences > 1) {
-    return `❌ Error: Multiple matches (${occurrences}) of the target block were found. Provide more surrounding lines (context) to make the target block unique.`;
+
+  // If target is empty or whitespace, append replacement to the file
+  if (!target || target.trim() === "") {
+    const newContent = content + (content.endsWith("\n") ? "" : "\n") + (replacement || "");
+    await writeFile(fullPath, newContent, "utf-8");
+    _updateIndexForFile(fullPath, newContent).catch(() => {});
+    const validation = await performPostWriteValidation(fullPath, newContent);
+    let report = `✅ Content appended successfully to: ${path}`;
+    if (validation.errors.length > 0) {
+      report += `\n\n❌ WARNING: SYNTAX ERRORS DETECTED:\n- ` + validation.errors.join("\n- ");
+    }
+    return report;
   }
 
-  // Perform single replacement using split/join to avoid '$' replacement pattern expansion
-  const parts = normalizedContent.split(normalizedTarget);
-  const newContent = parts.join(normalize(replacement));
-  
+  // Normalize line endings and trailing spaces
+  const normalize = (str) => (str || "").replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "");
+  const normalizedContent = normalize(content);
+  const normalizedTarget = normalize(target);
+  const normalizedReplacement = normalize(replacement || "");
+
+  // Match using multi-tier fuzzy matcher
+  const matchResult = findFuzzyMatch(normalizedContent, normalizedTarget);
+
+  if (!matchResult.matched) {
+    if (matchResult.error === "multiple_matches") {
+      return `❌ Error: Multiple matches (${matchResult.count}) of the target block were found in ${path}. Provide more surrounding lines to make the target block unique.`;
+    }
+    return `❌ Error: Target block not found in ${path}. Checked exact and fuzzy whitespace matching. Ensure the target snippet matches current file content.`;
+  }
+
+  // Splice replacement into matched range
+  const newContent = normalizedContent.slice(0, matchResult.startIdx) + normalizedReplacement + normalizedContent.slice(matchResult.endIdx);
+
   // Write to disk
   await writeFile(fullPath, newContent, "utf-8");
 
@@ -716,8 +914,9 @@ async function patchFileTool({ path, target, replacement }) {
 
   // Validate syntax and indentation
   const validation = await performPostWriteValidation(fullPath, newContent);
-  
-  let report = `✅ File patched successfully: ${path}`;
+
+  const matchLabel = matchResult.matchType === "exact" ? "" : ` (via ${matchResult.matchType} matching)`;
+  let report = `✅ File patched successfully${matchLabel}: ${path}`;
   if (validation.errors.length > 0) {
     report += `\n\n❌ WARNING: SYNTAX ERRORS DETECTED IN THE NEW PATCH:\n- ` + validation.errors.join("\n- ");
   }

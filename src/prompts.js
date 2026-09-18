@@ -38,8 +38,15 @@ STATE CHECKPOINTING & REWIND:
 - Available checkpoint steps are tracked in the agent's memory during the session.
 
 RULES:
-- YOU MUST ALWAYS prefer patch_file over write_file for editing existing files. Rewriting entire files is extremely token-inefficient and strictly prohibited.
-- Match exact indentation in patch_file targets. Leading spaces must be precise.
+- YOU MUST ALWAYS prefer patch_file over write_file for all code modifications. It uses resilient multi-tier fuzzy matching (tolerant to indentation/whitespace) and auto-creates files if target is empty.
+- You can also write raw Search/Replace blocks directly in your response:
+  path/to/file.js
+  <<<<<<< SEARCH
+  [old code]
+  =======
+  [new code]
+  >>>>>>> REPLACE
+  Swades will automatically detect and apply them.
 - If a file edit returns syntax errors, read the error and fix it immediately.
 - Think step-by-step. Explain your reasoning before acting.
 
@@ -97,13 +104,13 @@ export const TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "patch_file",
-      description: "Edit an existing file by replacing a unique block of text. Space-sensitive. Preferred over write_file.",
+      description: "Edit a file by replacing a target block of text with replacement, or create a new file (leave target empty ''). Supports fuzzy matching for indentation and whitespace. Always preferred over write_file.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Relative path" },
-          target: { type: "string", description: "Exact text block to replace (must match including indentation)" },
-          replacement: { type: "string", description: "Replacement text with correct indentation" }
+          path: { type: "string", description: "Relative path to file" },
+          target: { type: "string", description: "Text block to replace. Can include a few surrounding lines. If empty (''), replacement is created as a new file or appended." },
+          replacement: { type: "string", description: "Replacement text or new file content." }
         },
         required: ["path", "target", "replacement"]
       }
