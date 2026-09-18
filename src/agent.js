@@ -276,7 +276,7 @@ STACK RULES:
 
   // ---- Context Window Pruner ----
   function pruneContext(msgs) {
-    if (msgs.length <= 40) return msgs;
+    if (msgs.length <= 20) return msgs;
     const systemMsgs = msgs.filter(m => m.role === "system");
     const recent = msgs.slice(-15);
     const middle = msgs.slice(systemMsgs.length, msgs.length - 15);
@@ -414,6 +414,7 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       const isFatal =
         status === 404 || msg.includes("does not exist") || msg.includes("404") ||
         status === 401 || msg.includes("invalid api key") || msg.includes("401") ||
+        status === 413 || msg.includes("request too large") || msg.includes("413") ||
         (status === 400 && !msg.includes("rate") && !msg.includes("context_length"));
 
       if (isFatal) {
