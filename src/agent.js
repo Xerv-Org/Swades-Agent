@@ -248,6 +248,10 @@ STACK RULES:
   let lastCheckpointStep = -1;
   const workdir = process.env.WORKDIR || process.cwd();
   const resolvedWorkdir = resolve(workdir);
+  // Holds the original system prompt text — updated by deadline pressure logic each step.
+  // Stored here (NOT as a property on the message object) so providers like Groq don't
+  // reject messages containing non-standard fields like `_originalContent`.
+  let _systemPromptOriginal = null;
 
   // ---- Context Window Pruner ----
   function pruneContext(msgs) {
@@ -355,10 +359,12 @@ STACK RULES:
 - Critical Instruction: ${pressureGuideline}
 ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceStepsLeft + 1} steps if you do not complete the task or use 'extend_deadline'.` : ""}`;
 
-    if (!messages[0]._originalContent) {
-      messages[0]._originalContent = messages[0].content;
+    // Store original system prompt content in a closure variable — never on the
+    // message object itself, because providers like Groq reject unknown properties.
+    if (_systemPromptOriginal === null) {
+      _systemPromptOriginal = messages[0].content;
     }
-    messages[0].content = messages[0]._originalContent + timePressureContext;
+    messages[0].content = _systemPromptOriginal + timePressureContext;
 
     let response;
     let header = false;

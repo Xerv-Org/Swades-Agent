@@ -139,6 +139,29 @@ function formatLLMError(err, modelName) {
   return `[LLM Error] Model: ${modelName} | Status: ${status} | Retryable: ${retryable} | ${err.message}`;
 }
 
+// ---- Message sanitizer ----
+
+/**
+ * Strip all non-standard properties from message objects before sending to any provider.
+ *
+ * The OpenAI Chat Completions spec only allows these fields per message:
+ *   role, content, tool_calls, tool_call_id, name
+ *
+ * Any extra property (e.g. `_originalContent`, internal SDK fields) causes providers
+ * like Groq to return HTTP 400 "property '...' is unsupported".
+ */
+const ALLOWED_MSG_KEYS = new Set(["role", "content", "tool_calls", "tool_call_id", "name"]);
+
+function sanitizeMessages(messages) {
+  return messages.map((msg) => {
+    const clean = {};
+    for (const key of ALLOWED_MSG_KEYS) {
+      if (key in msg) clean[key] = msg[key];
+    }
+    return clean;
+  });
+}
+
 // ---- Internal streaming call ----
 
 /**
@@ -147,7 +170,7 @@ function formatLLMError(err, modelName) {
 async function _callLLMInternal(messages, tools, onChunk, model) {
   const params = {
     model,
-    messages,
+    messages: sanitizeMessages(messages), // always sanitize before sending
     temperature: 0,
     stream: true,
   };
