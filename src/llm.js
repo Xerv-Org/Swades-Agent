@@ -193,12 +193,20 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
 
   // ---- Reconstruct full message from streaming chunks ----
   let contentBuf = "";
+  let reasoningBuf = "";
   // tool_calls accumulator: index → { id, type, function: { name, arguments } }
   const toolCallMap = {};
 
   for await (const chunk of stream) {
     const delta = chunk.choices?.[0]?.delta;
     if (!delta) continue;
+
+    // --- Reasoning chunks (for reasoning models: gpt-oss-20b, deepseek-r1, etc.) ---
+    const reasoningText = delta.reasoning || delta.reasoning_content;
+    if (reasoningText) {
+      reasoningBuf += reasoningText;
+      if (onChunk) onChunk({ type: "reasoning", text: reasoningText });
+    }
 
     // --- Text content chunks ---
     if (delta.content) {
@@ -237,8 +245,11 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
 
   const message = {
     role: "assistant",
-    content: contentBuf || null,
+    content: contentBuf || (toolCalls.length === 0 && reasoningBuf ? reasoningBuf : null),
   };
+  if (reasoningBuf) {
+    message.reasoning = reasoningBuf;
+  }
   if (toolCalls.length > 0) {
     message.tool_calls = toolCalls;
   }

@@ -38,6 +38,7 @@ STATE CHECKPOINTING & REWIND:
 - Available checkpoint steps are tracked in the agent's memory during the session.
 
 RULES:
+- CRITICAL TOOL CONSTRAINTS: You must strictly ONLY call tools defined in your tool schemas (read_file, write_file, patch_file, run_command, git_checkpoint, etc.). NEVER call hypothetical or internal tools like repo_browser.*, apply_patch, etc.
 - YOU MUST ALWAYS prefer patch_file over write_file for all code modifications. It uses resilient multi-tier fuzzy matching (tolerant to indentation/whitespace) and auto-creates files if target is empty.
 - You can also write raw Search/Replace blocks directly in your response:
   path/to/file.js

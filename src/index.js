@@ -168,10 +168,7 @@ async function chatLoop(initialTask, initialImage) {
     console.log(chalk.dim(`\n  Running initial task: "${initialTask}"\n`));
     try {
       const result = await runAgent(initialTask, null, sessionMessages, initialImage);
-      // After first task, sessionMessages is still null — the agent created its own.
-      // We pass null so subsequent tasks start fresh unless the user wants continuity.
-      // To enable continuity across sessions, we'd need runAgent to return messages.
-      // For now, continuity is within a single chat invocation via sessionMessages below.
+      sessionMessages = runAgent.lastMessages || sessionMessages;
     } catch (err) {
       console.error(chalk.red(`Fatal: ${err.message}`));
     }
@@ -207,6 +204,7 @@ async function chatLoop(initialTask, initialImage) {
 
     if (trimmed.toLowerCase() === "clear") {
       sessionMessages = null;
+      if (runAgent.lastMessages) runAgent.lastMessages = null;
       console.log(chalk.yellow("  🧹 Context cleared — starting fresh.\n"));
       continue;
     }
@@ -224,6 +222,7 @@ async function chatLoop(initialTask, initialImage) {
     console.log(chalk.dim("\n" + "─".repeat(60)));
     try {
       const result = await runAgent(task, null, sessionMessages, image);
+      sessionMessages = runAgent.lastMessages || sessionMessages;
       // Note: tier info is displayed by the orchestrator itself when it activates
       // Record completed session
       await recordSession(task, typeof result === "string" ? result : String(result), []);

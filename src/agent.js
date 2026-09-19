@@ -389,11 +389,15 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
 
     let response;
     let header = false;
+    let reasoningHeader = false;
 
     try {
       response = await callLLM(messages, TOOL_SCHEMAS, (chunk) => {
-        if (chunk.type === "content") {
-          if (!header) { process.stdout.write(chalk.blue("💭 ")); header = true; }
+        if (chunk.type === "reasoning" && chunk.text) {
+          if (!reasoningHeader) { process.stdout.write(chalk.gray("\n🤔 Thinking: ")); reasoningHeader = true; }
+          process.stdout.write(chalk.gray(chunk.text));
+        } else if (chunk.type === "content") {
+          if (!header) { process.stdout.write(chalk.blue(reasoningHeader ? "\n💭 " : "💭 ")); header = true; }
           process.stdout.write(chalk.blue(chunk.text));
         } else if (chunk.type === "tool_name" && chunk.name) {
           process.stdout.write(chalk.magenta(`\n   🔧 ${chunk.name}`));
@@ -403,11 +407,22 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       });
       console.log();
     } catch (err) {
-      const status = err.status || err.statusCode || 0;
+      const status = err.status || err.statusCode || err.originalError?.status || err.originalError?.error?.status_code || 0;
       const msg = (err.message || "").toLowerCase();
+      const isToolUseFailed = msg.includes("tool choice is none") || msg.includes("tool_use_failed") || err.originalError?.code === "tool_use_failed" || err.error?.code === "tool_use_failed";
 
       // ---- Rate limits (HTTP 429) — transient, never fatal ----
       const isRateLimit = status === 429 || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("otpm") || msg.includes("tpm");
+
+      // ---- Recoverable tool hallucination (e.g. model called repo_browser.* instead of schema tools) ----
+      if (isToolUseFailed) {
+        console.log(chalk.yellow(`\n   ⚠️ [TOOL RECOVERY] Model attempted to call an unlisted tool. Self-healing...`));
+        messages.push({
+          role: "user",
+          content: "⚠️ Tool Error: You attempted to call an invalid or unlisted tool. You must STRICTLY use only the tools declared in your tool schemas: read_file, write_file, patch_file, run_command, git_checkpoint, etc. Please call the appropriate valid tool now."
+        });
+        continue;
+      }
 
       // ---- Fatal errors — abort immediately, never retry ----
       //   404 = model not found / access denied for this key
@@ -496,6 +511,7 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
         const durationMs = Date.now() - (activeDeadline.startTime || Date.now());
         try { await recordAgentPerformance(role, true, durationMs); } catch (_) {}
       }
+      runAgent.lastMessages = messages;
       return answer;
     }
 
@@ -587,5 +603,6 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
   const msg = `⚠ Hit ${max}-step limit.`;
   console.log(chalk.red.bold(`\n${msg}\n`));
   await recordSession(task, msg, [...toolsUsed]);
+  runAgent.lastMessages = messages;
   return msg;
 }
