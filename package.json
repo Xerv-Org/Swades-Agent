@@ -28,7 +28,8 @@
     ".": "./src/index.js"
   },
   "bin": {
-    "swades-agent": "./src/index.js"
+    "swades-agent": "./src/index.js",
+    "swades": "./src/index.js"
   },
   "scripts": {
     "start": "node src/index.js",
