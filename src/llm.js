@@ -42,7 +42,7 @@ export const API_KEY = process.env.API_KEY
 
 const DEFAULT_MODELS = {
   openrouter: "openrouter/free",
-  groq:       "llama-3.3-70b-versatile",
+  groq:       "openai/gpt-oss-120b",
   openai:     "gpt-4o",
   ollama:     "qwen2.5-coder:7b",
   generic:    "gpt-4o",
