@@ -42,7 +42,7 @@ export const API_KEY = process.env.API_KEY
 
 const DEFAULT_MODELS = {
   openrouter: "openrouter/free",
-  groq:       "openai/gpt-oss-120b",
+  groq:       "openai/gpt-oss-20b",
   openai:     "gpt-4o",
   ollama:     "qwen2.5-coder:7b",
   generic:    "gpt-4o",
@@ -106,8 +106,8 @@ function isRetryableError(err) {
   const msg = (err.message || "").toLowerCase();
   const status = err.status || err.statusCode || 0;
 
-  // HTTP 429 = Rate Limit
-  if (status === 429 || msg.includes("429") || msg.includes("rate limit") || msg.includes("rate_limit")) {
+  // HTTP 429 = Rate Limit, HTTP 413 TPM Overflow (Groq/OpenAI TPM limit)
+  if (status === 429 || status === 413 || msg.includes("429") || msg.includes("413") || msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("tokens per minute") || msg.includes("tpm")) {
     return true;
   }
   // HTTP 402 = Payment Required (key limit exceeded)

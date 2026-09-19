@@ -276,10 +276,22 @@ STACK RULES:
 
   // ---- Context Window Pruner ----
   function pruneContext(msgs) {
-    if (msgs.length <= 20) return msgs;
-    const systemMsgs = msgs.filter(m => m.role === "system");
-    const recent = msgs.slice(-15);
-    const middle = msgs.slice(systemMsgs.length, msgs.length - 15);
+    // 1. Truncate very large tool outputs in older messages (>3 turns ago) to prevent TPM blowouts
+    const cutoff = msgs.length - 6;
+    const sanitizedMsgs = msgs.map((m, idx) => {
+      if (idx < cutoff && m.role === "tool" && typeof m.content === "string" && m.content.length > 800) {
+        return {
+          ...m,
+          content: m.content.slice(0, 400) + "\n... [older tool output truncated for token efficiency] ...\n" + m.content.slice(-200)
+        };
+      }
+      return m;
+    });
+
+    if (sanitizedMsgs.length <= 14) return sanitizedMsgs;
+    const systemMsgs = sanitizedMsgs.filter(m => m.role === "system");
+    const recent = sanitizedMsgs.slice(-10);
+    const middle = sanitizedMsgs.slice(systemMsgs.length, sanitizedMsgs.length - 10);
     const summary = `[CONTEXT PRUNED: ${middle.length} older messages compressed to save context. Those steps covered file reads, patches, and verifications. Current workspace state reflects all those changes.]`;
     return [...systemMsgs, { role: "user", content: summary }, ...recent];
   }
