@@ -302,8 +302,9 @@ async function main() {
 // ---- CLI guard ----
 const isMain = process.argv[1] && (
   fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
-  resolve(process.argv[1]).endsWith("bin/swades-agent") ||
-  resolve(process.argv[1]).endsWith("bin\\swades-agent")
+  resolve(process.argv[1]).endsWith("swades") ||
+  resolve(process.argv[1]).endsWith("swades-agent") ||
+  resolve(process.argv[1]).endsWith("index.js")
 );
 
 if (isMain) {
