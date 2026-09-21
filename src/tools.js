@@ -7,10 +7,13 @@ import { exec, spawn } from "node:child_process";
 import { resolve, relative, dirname, basename } from "node:path";
 import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import chalk from "chalk";
 import { getSwadesCacheDir, ensureCacheDir } from "./cleanup.js";
+
+export const workdirStorage = new AsyncLocalStorage();
 
 // Dangerous command patterns that require user confirmation
 const DANGEROUS_PATTERNS = [
@@ -48,6 +51,10 @@ function isProcessAlive(pid) {
 // ---- Helpers ----
 
 function getWorkdir() {
+  const store = workdirStorage.getStore();
+  if (store && store.workdir && existsSync(store.workdir)) {
+    return store.workdir;
+  }
   const dir = process.env.WORKDIR || process.cwd();
   return existsSync(dir) ? dir : process.cwd();
 }

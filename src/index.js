@@ -28,6 +28,7 @@ function printHelp() {
 
   console.log(chalk.white.bold("  Execution Flags:\n"));
   console.log(chalk.green("  --cua, -c           ") + "Computer Use Agent (desktop/GUI automation) — EXPLICIT USER OPT-IN ONLY");
+  console.log(chalk.green("  --orchestrated, -o  ") + "Multi-agent orchestrated pipeline with dependency graphs & debate");
   console.log(chalk.green("  --autonomous, -a    ") + "Hint: start in Director loop (agent can escalate on its own anyway)");
   console.log(chalk.green("  --sim               ") + "Hint: bias toward run_simulation tool (agent can also call it autonomously)");
   console.log(chalk.green("  --subagents, -s     ") + "Hint: bias toward spawn_subagents tool");
@@ -60,12 +61,13 @@ function parseCLI() {
     process.exit(0);
   }
 
-  const hasCuaFlag        = args.includes("--cua")        || args.includes("-c");
-  const hasAutonomousFlag = args.includes("--autonomous")  || args.includes("-a");
-  const hasSimFlag        = args.includes("--sim");
-  const hasNoSimFlag      = args.includes("--no-sim");
-  const hasSubagentsFlag  = args.includes("--subagents")   || args.includes("-s");
-  const hasRewindFlag     = args.includes("--rewind");
+  const hasCuaFlag         = args.includes("--cua")         || args.includes("-c");
+  const hasOrchestratedFlag = args.includes("--orchestrated") || args.includes("-o");
+  const hasAutonomousFlag  = args.includes("--autonomous")   || args.includes("-a");
+  const hasSimFlag         = args.includes("--sim");
+  const hasNoSimFlag       = args.includes("--no-sim");
+  const hasSubagentsFlag   = args.includes("--subagents")    || args.includes("-s");
+  const hasRewindFlag      = args.includes("--rewind");
 
   let image = null;
   const imgIdx = args.findIndex(a => a === "--image" || a === "-i");
@@ -74,7 +76,7 @@ function parseCLI() {
   }
 
   const FLAG_TOKENS = new Set([
-    "--cua", "-c", "--autonomous", "-a", "--sim", "--no-sim",
+    "--cua", "-c", "--orchestrated", "-o", "--autonomous", "-a", "--sim", "--no-sim",
     "--subagents", "-s", "--rewind", "--help", "-h",
   ]);
   const taskArgs = [];
@@ -86,12 +88,16 @@ function parseCLI() {
   const task = taskArgs.join(" ").trim();
 
   // Apply env hints from flags — capability tool calling is biased by these
+  if (hasOrchestratedFlag) {
+    process.env.FORCE_ORCHESTRATED = "true";
+    process.env.PREFER_ORCHESTRATED = "true";
+  }
   if (hasSimFlag)        process.env.PREFER_SIMULATION = "true";
   if (hasNoSimFlag)      process.env.DISABLE_SIMULATION = "true";
   if (hasSubagentsFlag)  process.env.PREFER_SUBAGENTS = "true";
   if (hasAutonomousFlag) process.env.PREFER_DIRECTOR = "true";
 
-  return { task, image, isCUA: hasCuaFlag, hasRewindFlag };
+  return { task, image, isCUA: hasCuaFlag, hasRewindFlag, isOrchestrated: hasOrchestratedFlag };
 }
 
 // ============================================================
@@ -242,7 +248,7 @@ async function chatLoop(initialTask, initialImage) {
 // ============================================================
 
 async function main() {
-  const { task, image, isCUA, hasRewindFlag } = parseCLI();
+  const { task, image, isCUA, hasRewindFlag, isOrchestrated } = parseCLI();
 
   // --rewind: list available checkpoints (informational)
   if (hasRewindFlag) {
@@ -279,6 +285,23 @@ async function main() {
 
   // ---- Normal & Autonomous modes: startup + chat loop ----
   await startup(false);
+
+  // ---- Orchestrator mode: --orchestrated / -o flag ----
+  if (isOrchestrated && task) {
+    console.log(chalk.blue.bold("\n🔷 Orchestrator mode (--orchestrated flag): delegating to Multi-Agent Orchestrator"));
+    try {
+      const { runOrchestrated } = await import("./orchestrator.js");
+      const workdir = process.env.WORKDIR || process.cwd();
+      const result = await runOrchestrated(task, resolve(workdir));
+      if (result) {
+        console.log(chalk.green("\n  ✅ Orchestrated execution completed successfully."));
+      }
+    } catch (err) {
+      console.error(chalk.red(`Fatal: ${err.message}`));
+      process.exit(1);
+    }
+    process.exit(0);
+  }
 
   // PREFER_DIRECTOR hint: start with Director for long-horizon autonomous mode
   if (process.env.PREFER_DIRECTOR === "true" && task) {

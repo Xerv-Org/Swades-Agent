@@ -276,24 +276,45 @@ STACK RULES:
 
   // ---- Context Window Pruner ----
   function pruneContext(msgs) {
-    // 1. Truncate very large tool outputs in older messages (>3 turns ago) to prevent TPM blowouts
-    const cutoff = msgs.length - 6;
-    const sanitizedMsgs = msgs.map((m, idx) => {
-      if (idx < cutoff && m.role === "tool" && typeof m.content === "string" && m.content.length > 800) {
-        return {
-          ...m,
-          content: m.content.slice(0, 400) + "\n... [older tool output truncated for token efficiency] ...\n" + m.content.slice(-200)
-        };
+    // 1. Truncate large tool outputs in older messages (>2 turns ago)
+    const cutoff = msgs.length - 3;
+    let sanitizedMsgs = msgs.map((m, idx) => {
+      if (m.role === "tool" && typeof m.content === "string") {
+        if (idx < cutoff && m.content.length > 1500) {
+          return {
+            ...m,
+            content: m.content.slice(0, 800) + "\n... [older large output truncated] ...\n" + m.content.slice(-200)
+          };
+        } else if (m.content.length > 3000) {
+          return {
+            ...m,
+            content: m.content.slice(0, 1500) + "\n... [large output truncated] ...\n" + m.content.slice(-300)
+          };
+        }
       }
       return m;
     });
 
-    if (sanitizedMsgs.length <= 14) return sanitizedMsgs;
+    // 2. Window-based pruning if non-system messages grow beyond 5
     const systemMsgs = sanitizedMsgs.filter(m => m.role === "system");
-    const recent = sanitizedMsgs.slice(-10);
-    const middle = sanitizedMsgs.slice(systemMsgs.length, sanitizedMsgs.length - 10);
-    const summary = `[CONTEXT PRUNED: ${middle.length} older messages compressed to save context. Those steps covered file reads, patches, and verifications. Current workspace state reflects all those changes.]`;
-    return [...systemMsgs, { role: "user", content: summary }, ...recent];
+    const nonSystem = sanitizedMsgs.filter(m => m.role !== "system");
+    if (nonSystem.length > 5) {
+      const firstUserMsg = nonSystem[0];
+      const rest = nonSystem.slice(1);
+      let sliceIdx = Math.max(0, rest.length - 4);
+      // Ensure we don't sever a tool response from its initiating assistant tool_call
+      while (sliceIdx > 0 && rest[sliceIdx].role === "tool") {
+        sliceIdx--;
+      }
+      const recent = rest.slice(sliceIdx);
+      const middleCount = sliceIdx;
+      if (middleCount > 0) {
+        const summary = `[CONTEXT COMPRESSED: ${middleCount} older turns compressed. Workspace files are up to date.]`;
+        sanitizedMsgs = [...systemMsgs, firstUserMsg, { role: "user", content: summary }, ...recent];
+      }
+    }
+
+    return sanitizedMsgs;
   }
 
   let estimatedDurationSeconds = 180;
@@ -404,7 +425,8 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
     let reasoningHeader = false;
 
     try {
-      response = await callLLM(messages, TOOL_SCHEMAS, (chunk) => {
+      const messagesToSend = pruneContext(messages);
+      response = await callLLM(messagesToSend, TOOL_SCHEMAS, (chunk) => {
         if (chunk.type === "reasoning" && chunk.text) {
           if (!reasoningHeader) { process.stdout.write(chalk.gray("\n🤔 Thinking: ")); reasoningHeader = true; }
           process.stdout.write(chalk.gray(chunk.text));
@@ -600,7 +622,7 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
     }
 
     // ---- Context Window Pruning (every step, if messages are large) ----
-    if (messages.length > 40) {
+    if (messages.length > 8) {
       const prunedMessages = pruneContext(messages);
       if (prunedMessages.length < messages.length) {
         console.log(chalk.dim(`   🧹 Context pruned: ${messages.length} → ${prunedMessages.length} messages`));

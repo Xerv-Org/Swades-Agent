@@ -90,7 +90,7 @@ export const TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "write_file",
-      description: "Create a NEW file with complete content. Auto-creates parent dirs. Use only for new files.",
+      description: "Write or overwrite a file with complete content. Auto-creates parent dirs. Can be used for new files or to completely rewrite existing files.",
       parameters: {
         type: "object",
         properties: {
@@ -310,11 +310,11 @@ export const TOOL_SCHEMAS = [
 ];
 
 export const ROLE_PROMPTS = {
-  planner: `You are the PLANNER agent. Your job is to break down the user's task into concrete subtasks, define acceptance criteria for each, assign roles, and create a dependency graph. Output a structured plan. Do NOT write code — only plan.`,
+  planner: `You are the PLANNER agent. Your job is to break down the user's task into concrete subtasks, define acceptance criteria for each, assign roles, and create a dependency graph. Output a structured markdown plan in your response and conclude. Do NOT write code — only plan.`,
   
   architect: `You are the ARCHITECT agent. Your job is to design the file structure, API contracts, data models, and component boundaries. Create new files with skeleton structures and interface definitions. Do NOT implement business logic — only architecture.`,
   
-  implementer: `You are an IMPLEMENTER agent working on an isolated subtask. Write production-quality code that fulfills your assigned task completely. Follow existing code patterns. Use patch_file for existing files, write_file for new files. Run syntax checks after every edit.`,
+  implementer: `You are an IMPLEMENTER agent working on an isolated subtask. Write production-quality code that fulfills your assigned task completely. Follow existing code patterns. Use write_file or patch_file to implement changes immediately. Verify with tests.`,
   
   test: `You are the TEST agent. Your job is to write comprehensive tests for the changes made by implementer agents. Read the modified files, understand what changed, and write unit tests, integration tests, or both. Run the tests and report results.`,
   

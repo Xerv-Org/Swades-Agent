@@ -42,19 +42,28 @@ export const API_KEY = process.env.API_KEY
 
 const DEFAULT_MODELS = {
   openrouter: "openrouter/free",
-  groq:       "openai/gpt-oss-20b",
+  groq:       "qwen/qwen3.8-27b",
   openai:     "gpt-4o",
   ollama:     "qwen2.5-coder:7b",
   generic:    "gpt-4o",
 };
 
+const DEFAULT_FALLBACK_MODELS = {
+  groq: ["openai/gpt-oss-120b", "openai/gpt-oss-20b"],
+  openrouter: ["meta-llama/llama-3.3-70b-instruct:free", "google/gemini-2.0-flash-exp:free"],
+};
+
 export const MODEL = process.env.MODEL || DEFAULT_MODELS[PROVIDER] || "openrouter/free";
 
 // Fallback cascade: comma-separated list of models to try if primary fails
-const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || "")
+const configuredFallbacks = (process.env.FALLBACK_MODELS || "")
   .split(",")
   .map(m => m.trim())
   .filter(Boolean);
+
+const FALLBACK_MODELS = configuredFallbacks.length > 0
+  ? configuredFallbacks
+  : (DEFAULT_FALLBACK_MODELS[PROVIDER] || []);
 
 let _client = null;
 
@@ -91,6 +100,8 @@ function getClient() {
       apiKey: API_KEY,
       baseURL: BASE_URL,
       defaultHeaders: getProviderHeaders(),
+      timeout: 30000,
+      maxRetries: 1,
     });
   }
   return _client;
@@ -106,8 +117,20 @@ function isRetryableError(err) {
   const msg = (err.message || "").toLowerCase();
   const status = err.status || err.statusCode || 0;
 
-  // HTTP 429 = Rate Limit, HTTP 413 TPM Overflow (Groq/OpenAI TPM limit)
-  if (status === 429 || status === 413 || msg.includes("429") || msg.includes("413") || msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("tokens per minute") || msg.includes("tpm")) {
+  // HTTP 429 = Rate Limit, HTTP 413 TPM/TPD Overflow (Groq/OpenAI limits)
+  if (status === 429 || status === 413 || msg.includes("429") || msg.includes("413") || msg.includes("rate limit") || msg.includes("rate_limit") || msg.includes("tokens per minute") || msg.includes("tpm") || msg.includes("tokens per day") || msg.includes("tpd")) {
+    return true;
+  }
+  // Timeout and network connection failures
+  if (
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("etimedout") ||
+    msg.includes("econnreset") ||
+    msg.includes("aborterror") ||
+    msg.includes("fetch failed") ||
+    msg.includes("network error")
+  ) {
     return true;
   }
   // HTTP 402 = Payment Required (key limit exceeded)
@@ -179,7 +202,7 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
     params.plugins = [{ id: "context-compression" }];
   }
 
-  // Groq's qwen3.8-27b has a strict 1000 OTPM limit; default 2048 causes immediate 429
+  // Groq's qwen3.8-27b has a strict 1000 OTPM limit; default 1234/2048 causes immediate 429
   if (PROVIDER === "groq" && model.includes("qwen3.8-27b")) {
     params.max_tokens = 950;
   }
@@ -271,6 +294,26 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
  * @returns {Object} - Reconstructed assistant message
  */
 export async function callLLM(messages, tools, onChunk, modelOverride) {
+  // Defensive normalization if messages is passed as a string or role
+  let normalizedMessages = messages;
+  let normalizedTools = tools;
+  if (typeof messages === "string") {
+    if (typeof tools === "string") {
+      let systemPrompt = messages;
+      try {
+        const { getRolePrompt } = await import("./prompts.js");
+        systemPrompt = getRolePrompt(messages);
+      } catch (_) {}
+      normalizedMessages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: tools }
+      ];
+      normalizedTools = undefined;
+    } else {
+      normalizedMessages = [{ role: "user", content: messages }];
+    }
+  }
+
   const primaryModel = modelOverride || MODEL;
   const cascade = [primaryModel, ...FALLBACK_MODELS.filter(m => m !== primaryModel)];
 
@@ -285,7 +328,7 @@ export async function callLLM(messages, tools, onChunk, modelOverride) {
         console.log(chalk.yellow(`   ⚡ Fallback attempt ${i + 1}/${maxAttempts}: trying ${currentModel}...`));
       }
 
-      return await _callLLMInternal(messages, tools, onChunk, currentModel);
+      return await _callLLMInternal(normalizedMessages, normalizedTools, onChunk, currentModel);
     } catch (err) {
       const errorInfo = formatLLMError(err, currentModel);
 

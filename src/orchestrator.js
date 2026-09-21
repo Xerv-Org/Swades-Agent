@@ -34,14 +34,15 @@ TINY — 1 solo agent, no orchestration:
 NORMAL — planner + 2-4 agents:
   Multi-file feature, moderate refactor, add tests, bug fix across files
 
-BIG — planner + 6-12 agents:
+BIG — planner + 4-6 agents:
   Cross-module feature, large refactor, new subsystem, migration
 
-HUGE — planner + 12-25+ agents (must justify each):
+HUGE — planner + 6-8 agents:
   Full architecture overhaul, massive migration, rewrite
 
 RULES:
-- Return ONLY valid JSON matching this structure exactly:
+- Keep the plan concise. Max 6-8 agents even for BIG/HUGE.
+- Return ONLY valid JSON matching this structure exactly (no trailing commas):
 {
   "tier": "tiny" | "normal" | "big" | "huge",
   "reason": "explanation of why",
@@ -50,7 +51,7 @@ RULES:
   "approvals": { "destructiveEdits": boolean, "dependencyInstall": boolean, "architectureChanges": boolean }
 }
 - For TINY: agents = [{"id": "solo", "role": "implementer", "task": "<original_task>", "dependsOn": []}]
-- For NORMAL/BIG/HUGE: Include planner, architect (if needed), implementers, test, review, merge agents. Each with a concrete task description and dependency chain.`;
+- For NORMAL/BIG/HUGE: Include planner, architect (if needed), implementers, test, review. Each with a concise task description and dependency chain.`;
 
 /**
  * Evaluate task complexity using LLM classification.
@@ -72,9 +73,29 @@ export async function evaluateComplexity(task) {
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      const result = JSON.parse(jsonMatch[0]);
-      console.log(chalk.cyan(`   🧠 Complexity: ${result.tier.toUpperCase()} (${result.agents?.length || 0} agents)`));
-      return result;
+      let rawJson = jsonMatch[0];
+      let result = null;
+      try {
+        result = JSON.parse(rawJson);
+      } catch (_) {
+        // Strip trailing commas before } or ]
+        rawJson = rawJson.replace(/,\s*([}\]])/g, "$1");
+        try {
+          result = JSON.parse(rawJson);
+        } catch (_) {
+          // If JSON was cut off near the end, attempt to close open brackets/braces
+          let patched = rawJson;
+          const openBrackets = (patched.match(/\[/g) || []).length - (patched.match(/\]/g) || []).length;
+          const openBraces = (patched.match(/\{/g) || []).length - (patched.match(/\}/g) || []).length;
+          for (let b = 0; b < openBrackets; b++) patched += "]";
+          for (let b = 0; b < openBraces; b++) patched += "}";
+          result = JSON.parse(patched.replace(/,\s*([}\]])/g, "$1"));
+        }
+      }
+      if (result && result.tier) {
+        console.log(chalk.cyan(`   🧠 Complexity: ${result.tier.toUpperCase()} (${result.agents?.length || 0} agents)`));
+        return result;
+      }
     }
   } catch (e) {
     console.log(chalk.dim(`   ⚠ Complexity eval failed: ${e.message}, defaulting to TINY`));

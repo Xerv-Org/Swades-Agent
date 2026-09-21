@@ -67,6 +67,20 @@ const execAsync = (cmd, options = {}) => new Promise((resolve, reject) => {
   });
 });
 
+function extractCleanDiff(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  let clean = raw.trim();
+  if (clean.includes("```")) {
+    const match = clean.match(/```(?:diff|patch)?\s*\n([\s\S]*?)```/);
+    if (match) clean = match[1].trim();
+  }
+  const diffStart = clean.search(/(?:diff --git|--- [ab]\/)/);
+  if (diffStart !== -1) {
+    clean = clean.slice(diffStart);
+  }
+  return clean.trimEnd() + "\n";
+}
+
 export class PatchSafety {
   constructor(workdir = process.env.WORKDIR || process.cwd()) {
     this.workdir = workdir;
@@ -85,14 +99,15 @@ export class PatchSafety {
     const patchId = crypto.randomUUID().slice(0, 8);
     const patchDir = await this._getPatchDir();
     const patchPath = path.join(patchDir, `${patchId}.patch`);
+    const cleanDiff = extractCleanDiff(diff);
     
-    await fs.writeFile(patchPath, diff, 'utf-8');
+    await fs.writeFile(patchPath, cleanDiff, 'utf-8');
     
     this.staged.set(patchId, {
       patchId,
       agentId,
       label,
-      diff,
+      diff: cleanDiff,
       timestamp: Date.now(),
       status: 'staged',
       patchPath

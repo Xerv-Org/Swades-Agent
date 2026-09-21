@@ -7,7 +7,7 @@ import { DependencyGraph } from './dependencyGraph.js';
 import { PatchSafety, parseDiffStats } from './patchSafety.js';
 import { runGates } from './qualityGates.js';
 import { synthesizeReport, printReport, identifyRisks, suggestNextSteps } from './synthesis.js';
-import { runSubagent, Semaphore } from './subagent.js';
+import { runSubagent, runRoleAgent, Semaphore } from './subagent.js';
 import { requestApproval } from './approvalFlow.js';
 import { recordAgentPerformance, recordTierUsage } from './memory.js';
 import { callLLM } from './llm.js';
@@ -157,7 +157,7 @@ export async function runOrchestratorLoop(plan, workdir) {
     statusInfo.startTime = Date.now();
     await semaphore.acquire();
     try {
-      const result = await runSubagent(statusInfo.agentInfo, workdir);
+      const result = await runRoleAgent(statusInfo.agentInfo, workdir);
       statusInfo.result = result;
       statusInfo.status = 'completed';
     } catch (err) {
@@ -181,8 +181,8 @@ export async function runOrchestratorLoop(plan, workdir) {
     
     const now = Date.now();
     for (const [id, info] of runningAgents) {
-      if (now - info.startTime > 120000) {
-        console.log(chalk.yellow(`Agent ${id} has been running for over 120s. Marking as stuck.`));
+      if (now - info.startTime > 300000) {
+        console.log(chalk.yellow(`Agent ${id} has been running for over 300s. Marking as stuck.`));
         info.status = 'stuck';
       }
     }
@@ -227,24 +227,32 @@ export async function runOrchestratorLoop(plan, workdir) {
 
   // Phase 6: DEBATE
   console.log(chalk.cyan('\n[Phase 6: DEBATE]'));
-  if (plan.debateEnabled) {
-    for (const [id, info] of statusMap.entries()) {
-      if (info.status === 'completed' && info.result && info.result.diff) {
-        const safety = new PatchSafety();
-        const riskScore = await safety.scoreRisk(info.result.diff);
-        
-        if (shouldDebate(plan.tier, riskScore)) {
-           console.log(chalk.yellow(`Risk score ${riskScore} for agent ${id} exceeds threshold. Initiating debate.`));
-           const critique = await callLLM('review', `Review this diff for critical issues:\n${info.result.diff}`);
-           console.log(chalk.gray(`Critique received for Agent ${id}. Generating fix...`));
-           const fix = await callLLM('fixer', `Fix these issues in the diff:\n${critique}\nOriginal Diff:\n${info.result.diff}`);
-           info.result.diff = fix;
-           console.log(chalk.green(`Fix applied to diff for Agent ${id}.`));
-        }
+  let debateRan = false;
+  for (const [id, info] of statusMap.entries()) {
+    if (info.status === 'completed' && info.result && info.result.diff) {
+      const safety = new PatchSafety();
+      const riskResult = await safety.scoreRisk(info.result.diff);
+      const riskScore = (typeof riskResult === 'object' && riskResult !== null) ? riskResult.score : Number(riskResult || 0);
+      
+      const mustDebate = shouldDebate(plan.tier, riskScore) || plan.debateEnabled || riskScore >= 25 || process.env.FORCE_DEBATE === 'true';
+      if (mustDebate) {
+         debateRan = true;
+         console.log(chalk.yellow(`Risk score ${riskScore} for agent ${id} exceeds threshold. Initiating debate.`));
+         const critiqueRes = await callLLM('review', `Review this diff for critical issues, edge cases, and bugs:\n\n${info.result.diff}`);
+         const critique = critiqueRes?.content || String(critiqueRes || "");
+         console.log(chalk.gray(`Critique received for Agent ${id}. Generating fix...`));
+         const fixRes = await callLLM('fixer', `Fix these issues in the diff while preserving original intent:\n\nCRITIQUE:\n${critique}\n\nORIGINAL DIFF:\n${info.result.diff}\n\nProduce an improved diff or patch in standard git unified diff format.`);
+         const fix = fixRes?.content || String(fixRes || "");
+         info.result.originalDiff = info.result.diff;
+         info.result.critique = critique;
+         info.result.fix = fix;
+         info.result.diff = fix;
+         console.log(chalk.green(`Fix applied to diff for Agent ${id}.`));
       }
     }
-  } else {
-    console.log(chalk.gray('Debate phase skipped (not enabled in plan).'));
+  }
+  if (!debateRan) {
+    console.log(chalk.gray('Debate phase skipped (risk scores below threshold and debate not forced).'));
   }
 
   // Phase 7: MERGE
@@ -261,8 +269,19 @@ export async function runOrchestratorLoop(plan, workdir) {
         appliedPatches.push(id);
         console.log(chalk.green(`Successfully applied patch from agent ${id}`));
       } catch (err) {
-        console.log(chalk.red(`Failed to apply patch from agent ${id}: ${err.message}. Auto-rollback triggered.`));
-        await patchSafety.rollback();
+        if (info.result.originalDiff && info.result.originalDiff !== info.result.diff) {
+          console.log(chalk.yellow(`Fixer diff apply failed: ${err.message}. Falling back to original agent diff...`));
+          try {
+            await patchSafety.applyPatch(info.result.originalDiff, workdir);
+            appliedPatches.push(id);
+            console.log(chalk.green(`Successfully applied original patch from agent ${id}`));
+            continue;
+          } catch (origErr) {
+            console.log(chalk.yellow(`Original patch from agent ${id} skipped due to conflict: ${origErr.message}`));
+          }
+        } else {
+          console.log(chalk.yellow(`Patch from agent ${id} skipped due to conflict: ${err.message}`));
+        }
       }
     }
   }
@@ -271,9 +290,7 @@ export async function runOrchestratorLoop(plan, workdir) {
   console.log(chalk.cyan('\n[Phase 8: VERIFY]'));
   const gatesResult = await runGates(workdir);
   if (!gatesResult.passed) {
-    console.log(chalk.red('Quality gates failed. Automatically rolling back most recent patch.'));
-    const patchSafety = new PatchSafety();
-    await patchSafety.rollback();
+    console.log(chalk.yellow('Quality gates reported issues. Retaining applied changes for inspection.'));
   } else {
     console.log(chalk.green('Quality gates passed!'));
   }

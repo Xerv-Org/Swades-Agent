@@ -33,6 +33,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
     "build:extension": "node esbuild.config.js",
     "package:vsce": "node src/prepare-package.js extension && vsce package",
     "publish:ovsx": "node src/prepare-package.js extension && ovsx publish",

@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import chalk from "chalk";
 import { runAgent } from "./agent.js";
-import { executeTool } from "./tools.js";
+import { executeTool, workdirStorage } from "./tools.js";
 import { getWorktreeTempDir } from "./cleanup.js";
 import { getRolePrompt } from './prompts.js';
 
@@ -126,6 +126,13 @@ async function removeWorktree(worktreePath, baseDir) {
  * @returns {{ label, diff, summary, success }}
  */
 export async function runSubagent(label, description, baseDir) {
+  // If label is an agentSpec object, delegate directly to runRoleAgent
+  if (typeof label === "object" && label !== null) {
+    const spec = label;
+    const resolvedBaseDir = description || baseDir || process.cwd();
+    return await runRoleAgent(spec, resolvedBaseDir);
+  }
+
   await globalSemaphore.acquire();
 
   let worktreePath = null;
@@ -137,19 +144,20 @@ export async function runSubagent(label, description, baseDir) {
     const prevWorkdir = process.env.WORKDIR;
     process.env.WORKDIR = worktreePath;
 
-    // Run codebase indexer inside the worktree
-    try {
-      await executeTool("index_codebase", {});
-    } catch (indexErr) {
-      console.log(chalk.dim(`   ⚠ Subagent [${label}] index failed (non-fatal): ${indexErr.message}`));
-    }
+    const { summary, diff } = await workdirStorage.run({ workdir: worktreePath }, async () => {
+      // Run codebase indexer inside the worktree
+      try {
+        await executeTool("index_codebase", {});
+      } catch (indexErr) {
+        console.log(chalk.dim(`   ⚠ Subagent [${label}] index failed (non-fatal): ${indexErr.message}`));
+      }
 
-    // Run the ReAct agent — give it a generous but finite step budget per subtask
-    const prefixedTask = `[SUBAGENT: ${label}]\n\n${description}\n\nYou are operating in an isolated workspace. Make all necessary changes to complete this subtask.`;
-    const summary = await runAgent(prefixedTask, Infinity);
-
-    // Capture the diff
-    const diff = await captureWorktreeDiff(worktreePath);
+      // Run the ReAct agent — give it a generous but finite step budget per subtask
+      const prefixedTask = `[SUBAGENT: ${label}]\n\n${description}\n\nYou are operating in an isolated workspace. Make all necessary changes to complete this subtask.`;
+      const s = await runAgent(prefixedTask, Infinity);
+      const d = await captureWorktreeDiff(worktreePath);
+      return { summary: s, diff: d };
+    });
 
     // Restore WORKDIR
     if (prevWorkdir !== undefined) process.env.WORKDIR = prevWorkdir;
@@ -172,12 +180,13 @@ export async function runSubagent(label, description, baseDir) {
 }
 
 /**
- * Run multiple subagents in parallel (up to semaphore cap).
- * After all subagents complete, cleans up the temp worktree directory.
+ * Run multiple subagents in parallel across isolated git worktrees.
+ * Each subagent gets its own worktree and its own ReAct agent loop.
+ * Concurrency is capped by globalSemaphore (default 5).
  *
- * @param {Array<{label, description}>} subtasks
- * @param {string} baseDir
- * @returns {Array<{label, diff, summary, success}>}
+ * @param {Array<{ label: string, description: string }>} subtasks
+ * @param {string} baseDir - Real workspace root (git repo)
+ * @returns {Promise<Array<{ label, diff, summary, success }>>}
  */
 export async function runSubagentsParallel(subtasks, baseDir) {
   console.log(chalk.cyan.bold(`\n🔷 Spawning ${subtasks.length} parallel subagents...`));
@@ -224,23 +233,26 @@ export async function runRoleAgent(agentSpec, baseDir, onProgress = null) {
     const prevWorkdir = process.env.WORKDIR;
     process.env.WORKDIR = worktreePath;
 
-    try {
-      await executeTool("index_codebase", {});
-    } catch (indexErr) {
-      console.log(chalk.dim(`   ⚠ RoleAgent [${agentSpec.id}] index failed: ${indexErr.message}`));
-    }
+    const { summary, diff } = await workdirStorage.run({ workdir: worktreePath }, async () => {
+      try {
+        await executeTool("index_codebase", {});
+      } catch (indexErr) {
+        console.log(chalk.dim(`   ⚠ RoleAgent [${agentSpec.id}] index failed: ${indexErr.message}`));
+      }
 
-    const rolePrompt = getRolePrompt(agentSpec.role);
-    const prefixedTask = `[ROLE: ${agentSpec.role}]\n${rolePrompt}\n\n[TASK]\n${agentSpec.task}\n\nYou are operating in an isolated workspace. Make all necessary changes.`;
+      const rolePrompt = getRolePrompt(agentSpec.role);
+      const prefixedTask = `[ROLE: ${agentSpec.role}]\n${rolePrompt}\n\n[TASK]\n${agentSpec.task}\n\nYou are operating in an isolated workspace. Make all necessary changes.`;
 
-    if (onProgress) {
-      interval = setInterval(() => {
-        onProgress(agentSpec.id, 'running', 'Agent is working...');
-      }, 5000);
-    }
+      if (onProgress) {
+        interval = setInterval(() => {
+          onProgress(agentSpec.id, 'running', 'Agent is working...');
+        }, 5000);
+      }
 
-    const summary = await runAgent(prefixedTask, Infinity);
-    const diff = await captureWorktreeDiff(worktreePath);
+      const s = await runAgent(prefixedTask, Infinity);
+      const d = await captureWorktreeDiff(worktreePath);
+      return { summary: s, diff: d };
+    });
     
     if (prevWorkdir !== undefined) process.env.WORKDIR = prevWorkdir;
     else delete process.env.WORKDIR;
