@@ -6,9 +6,11 @@ import { createInterface } from "node:readline";
 import chalk from "chalk";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { runAgent } from "./agent.js";
 import { runDirector } from "./director.js";
 import { runCUA } from "./cua.js";
+import { runCuaAgent } from "./cua_agent.js";
 import { executeTool } from "./tools.js";
 import { callLLM, API_KEY } from "./llm.js";
 import { migrateAndCleanup } from "./cleanup.js";
@@ -26,8 +28,10 @@ function printHelp() {
   console.log(chalk.white("  Usage: swades-agent [task] [flags]\n"));
   console.log(chalk.dim("  If no task is given, enters the persistent chat loop.\n"));
 
-  console.log(chalk.white.bold("  Execution Flags:\n"));
-  console.log(chalk.green("  --cua, -c           ") + "Computer Use Agent (desktop/GUI automation) — EXPLICIT USER OPT-IN ONLY");
+  console.log(chalk.white.bold("  Execution Flags & Commands:\n"));
+  console.log(chalk.green("  cua [task]          ") + "Computer Use Agent with low-level structural perception (CDP, AT-SPI2, /proc)");
+  console.log(chalk.green("  cua --hud           ") + "Launch interactive local Web HUD overlay (http://localhost:6081)");
+  console.log(chalk.green("  --cua, -c           ") + "Flag equivalent for CUA mode");
   console.log(chalk.green("  --orchestrated, -o  ") + "Multi-agent orchestrated pipeline with dependency graphs & debate");
   console.log(chalk.green("  --autonomous, -a    ") + "Hint: start in Director loop (agent can escalate on its own anyway)");
   console.log(chalk.green("  --sim               ") + "Hint: bias toward run_simulation tool (agent can also call it autonomously)");
@@ -45,11 +49,11 @@ function printHelp() {
   console.log(chalk.yellow("  /help               ") + "Show this help inside the loop");
   console.log();
   console.log(chalk.dim("  Examples:"));
-  console.log(chalk.dim('    swades-agent "Add login tests"'));
-  console.log(chalk.dim('    swades-agent "Refactor to TypeScript" --autonomous'));
-  console.log(chalk.dim('    swades-agent "Build REST API" --sim'));
-  console.log(chalk.dim('    swades-agent --cua "Open browser and screenshot homepage"'));
-  console.log(chalk.dim('    swades-agent "Implement UI" --image mockup.png'));
+  console.log(chalk.dim('    swades cua "Inspect browser console errors and list open windows"'));
+  console.log(chalk.dim('    swades cua --hud'));
+  console.log(chalk.dim('    swades "Add login tests"'));
+  console.log(chalk.dim('    swades "Refactor to TypeScript" --autonomous'));
+  console.log(chalk.dim('    swades "Build REST API" --sim'));
   console.log();
 }
 
@@ -61,7 +65,9 @@ function parseCLI() {
     process.exit(0);
   }
 
-  const hasCuaFlag         = args.includes("--cua")         || args.includes("-c");
+  const isCuaSubcommand    = args[0] === "cua";
+  const hasCuaFlag         = isCuaSubcommand || args.includes("--cua") || args.includes("-c");
+  const hasHudFlag         = args.includes("--hud");
   const hasOrchestratedFlag = args.includes("--orchestrated") || args.includes("-o");
   const hasAutonomousFlag  = args.includes("--autonomous")   || args.includes("-a");
   const hasSimFlag         = args.includes("--sim");
@@ -76,7 +82,7 @@ function parseCLI() {
   }
 
   const FLAG_TOKENS = new Set([
-    "--cua", "-c", "--orchestrated", "-o", "--autonomous", "-a", "--sim", "--no-sim",
+    "cua", "--cua", "-c", "--hud", "--orchestrated", "-o", "--autonomous", "-a", "--sim", "--no-sim",
     "--subagents", "-s", "--rewind", "--help", "-h",
   ]);
   const taskArgs = [];
@@ -97,7 +103,7 @@ function parseCLI() {
   if (hasSubagentsFlag)  process.env.PREFER_SUBAGENTS = "true";
   if (hasAutonomousFlag) process.env.PREFER_DIRECTOR = "true";
 
-  return { task, image, isCUA: hasCuaFlag, hasRewindFlag, isOrchestrated: hasOrchestratedFlag };
+  return { task, image, isCUA: hasCuaFlag, hasHudFlag, hasRewindFlag, isOrchestrated: hasOrchestratedFlag };
 }
 
 // ============================================================
@@ -248,7 +254,7 @@ async function chatLoop(initialTask, initialImage) {
 // ============================================================
 
 async function main() {
-  const { task, image, isCUA, hasRewindFlag, isOrchestrated } = parseCLI();
+  const { task, image, isCUA, hasHudFlag, hasRewindFlag, isOrchestrated } = parseCLI();
 
   // --rewind: list available checkpoints (informational)
   if (hasRewindFlag) {
@@ -264,20 +270,36 @@ async function main() {
     process.exit(0);
   }
 
-  // ---- CUA mode: strictly gated behind --cua flag ----
+  // ---- CUA mode: swades cua / swades --cua / swades cua --hud ----
   if (isCUA) {
-    if (!task) {
-      console.log(chalk.red("❌ --cua requires a task. Usage: swades-agent --cua \"your task\""));
-      process.exit(1);
+    if (hasHudFlag) {
+      console.log(chalk.cyan.bold("\n  🚀 Launching Swades CUA Interactive Web HUD..."));
+      console.log(chalk.dim("  Desktop Stream: 100% read-only locked (pointer-events: none)"));
+      console.log(chalk.green("  Access URL: http://localhost:6081\n"));
+      const overlayPath = resolve(fileURLToPath(import.meta.url), "../web_chat_overlay.py");
+      const hudProc = spawn("python3", [overlayPath], { stdio: "inherit" });
+      hudProc.on("close", (code) => process.exit(code || 0));
+      return;
     }
+
+    if (!task) {
+      console.log(chalk.yellow("\n  🚀 Swades CUA (Computer Use Agent) — Native Low-Level OS Perception"));
+      console.log(chalk.white("  Usage:"));
+      console.log(chalk.green('    swades cua "<task>"') + chalk.dim("     Autonomous ReAct loop (CDP, AT-SPI2, /proc)"));
+      console.log(chalk.green('    swades cua --hud') + chalk.dim("        Launch local Web HUD overlay (http://localhost:6081)"));
+      console.log(chalk.dim('  Example: swades cua "Inspect browser console errors and list open windows"\n'));
+      process.exit(0);
+    }
+
     if (!API_KEY) {
       console.log(chalk.red("❌ Missing API_KEY / GROQ_API_KEY in .env"));
       process.exit(1);
     }
+
     try {
-      await runCUA(task);
+      await runCuaAgent(task);
     } catch (err) {
-      console.error(chalk.red(`Fatal: ${err.message}`));
+      console.error(chalk.red(`Fatal CUA Error: ${err.message}`));
       process.exit(1);
     }
     return;

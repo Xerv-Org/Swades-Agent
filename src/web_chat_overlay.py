@@ -429,8 +429,134 @@ ALL_TOOLS = [
         "required": []
       }
     }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "read_screen_tree",
+      "description": "Zero-vision accessibility perception: reads full desktop AT-SPI2 widget hierarchy, states, and text.",
+      "parameters": {"type": "object", "properties": {}, "required": []}
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_focused_element",
+      "description": "Inspect active UI focus, editable text caret, and geometry without moving the mouse.",
+      "parameters": {"type": "object", "properties": {}, "required": []}
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_element_coordinates",
+      "description": "Dynamically calculate exact bounding box (x, y, w, h) for any UI element by accessibility name/role.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {"type": "string", "description": "Element name or role"}
+        },
+        "required": ["target"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_launch",
+      "description": "Launch browser with Chrome DevTools Protocol (CDP) enabled on dynamic ephemeral port.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {"type": "string", "description": "Target URL to open"},
+          "headless": {"type": "boolean", "description": "Run headless (default false)"}
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_console_errors",
+      "description": "Inspect live browser console errors, warnings, uncaught exceptions and stack traces via CDP.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "port": {"type": "integer", "description": "Optional CDP port"}
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_network_events",
+      "description": "Inspect failed HTTP network requests (4xx, 5xx, CORS) via CDP.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "port": {"type": "integer", "description": "Optional CDP port"}
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_eval_js",
+      "description": "Execute arbitrary JavaScript in active browser tab context to inspect state or cookies.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expression": {"type": "string", "description": "JS expression to evaluate"},
+          "port": {"type": "integer", "description": "Optional CDP port"}
+        },
+        "required": ["expression"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "browser_query_dom",
+      "description": "Query DOM elements and exact bounding boxes (x, y, w, h) matching a CSS selector.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {"type": "string", "description": "CSS selector"},
+          "port": {"type": "integer", "description": "Optional CDP port"}
+        },
+        "required": ["selector"]
+      }
+    }
   }
 ]
+
+import glob
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SEMANTIC_PY = os.path.join(SCRIPT_DIR, "semantic_desktop.py")
+BROWSER_CDP_PY = os.path.join(SCRIPT_DIR, "browser_cdp.py")
+
+def get_dynamic_env():
+    env = os.environ.copy()
+    if "DISPLAY" not in env or not env["DISPLAY"]:
+        env["DISPLAY"] = ":0"
+    if "XAUTHORITY" not in env or not os.path.exists(env.get("XAUTHORITY", "")):
+        uid = os.getuid()
+        mutter_auths = glob.glob(f"/run/user/{uid}/.mutter-Xwaylandauth.*")
+        if mutter_auths:
+            env["XAUTHORITY"] = sorted(mutter_auths, key=os.path.getmtime)[-1]
+        elif os.path.exists(os.path.expanduser("~/.Xauthority")):
+            env["XAUTHORITY"] = os.path.expanduser("~/.Xauthority")
+    env["GTK_MODULES"] = "gail:atk-bridge"
+    env["NO_AT_BRIDGE"] = "0"
+    return env
+
+ENV_DISPLAY = get_dynamic_env()
 
 def append_log(sender, text):
     try:
@@ -451,14 +577,6 @@ def append_log(sender, text):
             json.dump(logs, f, indent=2)
     except Exception as e:
         print(f"Log error: {e}")
-
-ENV_DISPLAY = {
-    "DISPLAY": ":99",
-    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/rocm/bin",
-    "HOME": "/root",
-    "GTK_MODULES": "gail:atk-bridge",
-    "NO_AT_BRIDGE": "0"
-}
 
 def execute_master_tool(name, args):
     try:
@@ -664,24 +782,70 @@ def execute_master_tool(name, args):
         elif name == "list_open_windows":
             p = subprocess.run("wmctrl -l -G -p", shell=True, env=ENV_DISPLAY, capture_output=True, text=True)
             wms = p.stdout.strip()
-            p2 = subprocess.run(["python3", "/root/swades-cua-sandbox/src/semantic_desktop.py", "list_windows"], capture_output=True, text=True, env=ENV_DISPLAY)
+            p2 = subprocess.run(["python3", SEMANTIC_PY, "list_windows"], capture_output=True, text=True, env=ENV_DISPLAY)
             sem = p2.stdout.strip()
             return f"Active Windows (wmctrl):\n{wms}\n\nAccessibility Windows:\n{sem}"
 
         elif name == "read_screen_tree":
-            p = subprocess.run(["python3", "/root/swades-cua-sandbox/src/semantic_desktop.py", "dump"], capture_output=True, text=True, env=ENV_DISPLAY)
+            p = subprocess.run(["python3", SEMANTIC_PY, "dump"], capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "get_focused_element":
+            p = subprocess.run(["python3", SEMANTIC_PY, "focused"], capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "get_element_coordinates":
+            target = args.get("target", "")
+            p = subprocess.run(["python3", SEMANTIC_PY, "extents", target], capture_output=True, text=True, env=ENV_DISPLAY)
             return p.stdout.strip() or p.stderr.strip()
 
         elif name == "interact_element":
             target = args.get("target", "")
             act = args.get("action", "click")
-            p = subprocess.run(["python3", "/root/swades-cua-sandbox/src/semantic_desktop.py", "interact", target, act], capture_output=True, text=True, env=ENV_DISPLAY)
+            p = subprocess.run(["python3", SEMANTIC_PY, "interact", target, act], capture_output=True, text=True, env=ENV_DISPLAY)
             return p.stdout.strip() or p.stderr.strip()
 
         elif name == "set_field_value":
             target = args.get("target", "")
             text = args.get("text", "")
-            p = subprocess.run(["python3", "/root/swades-cua-sandbox/src/semantic_desktop.py", "set_text", target, text], capture_output=True, text=True, env=ENV_DISPLAY)
+            p = subprocess.run(["python3", SEMANTIC_PY, "set_text", target, text], capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "browser_launch":
+            url = args.get("url", "about:blank")
+            cmd = ["python3", BROWSER_CDP_PY, "launch", url]
+            if args.get("headless"): cmd.append("--headless")
+            p = subprocess.run(cmd, capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "browser_console_errors":
+            port = args.get("port")
+            cmd = ["python3", BROWSER_CDP_PY, "console"]
+            if port: cmd.append(f"--port={port}")
+            p = subprocess.run(cmd, capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "browser_network_events":
+            port = args.get("port")
+            cmd = ["python3", BROWSER_CDP_PY, "network"]
+            if port: cmd.append(f"--port={port}")
+            p = subprocess.run(cmd, capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "browser_eval_js":
+            port = args.get("port")
+            expr = args.get("expression", "window.location.href")
+            cmd = ["python3", BROWSER_CDP_PY, "eval", expr]
+            if port: cmd.append(f"--port={port}")
+            p = subprocess.run(cmd, capture_output=True, text=True, env=ENV_DISPLAY)
+            return p.stdout.strip() or p.stderr.strip()
+
+        elif name == "browser_query_dom":
+            port = args.get("port")
+            sel = args.get("selector", "*")
+            cmd = ["python3", BROWSER_CDP_PY, "query", sel]
+            if port: cmd.append(f"--port={port}")
+            p = subprocess.run(cmd, capture_output=True, text=True, env=ENV_DISPLAY)
             return p.stdout.strip() or p.stderr.strip()
 
         elif name == "get_clipboard":
