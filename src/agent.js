@@ -104,7 +104,11 @@ class LoopDetector {
    * @returns {string|null} - Warning if stagnant, null otherwise
    */
   recordProgress(toolNames) {
-    const progressTools = ["write_file", "patch_file", "run_command"];
+    const progressTools = [
+      "write_file", "patch_file", "run_command",
+      "mouse_click", "type_keys", "mouse_scroll", "set_field_value", "interact_element",
+      "browser_launch", "open_browser_url", "browser_eval_js"
+    ];
     const madeProgress = toolNames.some((t) => progressTools.includes(t));
 
     if (madeProgress) {

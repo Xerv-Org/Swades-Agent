@@ -12,6 +12,7 @@ import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import chalk from "chalk";
 import { getSwadesCacheDir, ensureCacheDir } from "./cleanup.js";
+import { executeCuaTool } from "./cua_tools.js";
 
 export const workdirStorage = new AsyncLocalStorage();
 
@@ -1544,6 +1545,23 @@ const TOOL_REGISTRY = {
   verify_dom_state: verifyDomStateTool,
   // Git state rewind
   rewind_to_checkpoint: rewindCheckpointTool,
+  // Low-Level CUA & Desktop Perception tools (zero-screenshot hooks)
+  read_screen_tree: (args) => executeCuaTool("read_screen_tree", args),
+  list_open_windows: (args) => executeCuaTool("list_open_windows", args),
+  get_focused_element: (args) => executeCuaTool("get_focused_element", args),
+  get_element_coordinates: (args) => executeCuaTool("get_element_coordinates", args),
+  set_field_value: (args) => executeCuaTool("set_field_value", args),
+  interact_element: (args) => executeCuaTool("interact_element", args),
+  mouse_click: (args) => executeCuaTool("mouse_click", args),
+  mouse_scroll: (args) => executeCuaTool("mouse_scroll", args),
+  type_keys: (args) => executeCuaTool("type_keys", args),
+  open_browser_url: (args) => executeCuaTool("open_browser_url", args),
+  browser_launch: (args) => executeCuaTool("browser_launch", args),
+  browser_console_errors: (args) => executeCuaTool("browser_console_errors", args),
+  browser_network_events: (args) => executeCuaTool("browser_network_events", args),
+  browser_eval_js: (args) => executeCuaTool("browser_eval_js", args),
+  browser_query_dom: (args) => executeCuaTool("browser_query_dom", args),
+  inspect_desktop_state: (args) => executeCuaTool("inspect_desktop_state", args),
 };
 
 /**

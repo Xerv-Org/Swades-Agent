@@ -117,6 +117,21 @@ export const CUA_TOOL_SCHEMAS = [
   {
     type: "function",
     function: {
+      name: "open_browser_url",
+      description: "Open any URL in the user's default system browser (Firefox, Chrome, Brave, Edge, etc.) or a specified browser executable. Works universally on any existing browser without requiring debug flags.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to open" },
+          browser: { type: "string", description: "Optional browser command name (e.g. 'firefox', 'google-chrome', 'brave-browser'). Defaults to system default." }
+        },
+        required: ["url"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "browser_launch",
       description: "Launch a browser instance with Chrome DevTools Protocol (CDP) enabled on an automatically allocated ephemeral debugging port. Returns port and WebSocket debugger URL.",
       parameters: {
@@ -290,6 +305,22 @@ export async function executeCuaTool(name, args = {}) {
 
     case "type_keys":
       return await runSemantic(`type "${(args.keys || "").replace(/"/g, '\\"')}" ${args.is_shortcut ? 'true' : 'false'}`);
+
+    case "open_browser_url": {
+      let targetUrl = (args.url || "about:blank").trim();
+      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://") && !targetUrl.startsWith("file://")) {
+        targetUrl = `https://${targetUrl}`;
+      }
+      const b = args.browser ? args.browser.trim() : null;
+      let cmd;
+      if (b) {
+        cmd = `${b} "${targetUrl.replace(/"/g, '\\"')}" &`;
+      } else {
+        cmd = `xdg-open "${targetUrl.replace(/"/g, '\\"')}" 2>/dev/null || sensible-browser "${targetUrl.replace(/"/g, '\\"')}" 2>/dev/null || open "${targetUrl.replace(/"/g, '\\"')}" 2>/dev/null &`;
+      }
+      await runCommand(cmd);
+      return `Opened '${targetUrl}' in ${b || "default system browser"}.`;
+    }
 
     case "browser_launch": {
       const url = args.url ? `"${args.url.replace(/"/g, '\\"')}"` : '"about:blank"';

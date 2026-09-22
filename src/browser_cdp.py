@@ -35,18 +35,35 @@ def ensure_display_and_auth():
 
 ensure_display_and_auth()
 
-def find_browser_binary():
-    # 1. Check Playwright Chromium installs
+def find_browser_binary(preference=None):
+    if preference:
+        p = shutil.which(preference)
+        if p: return p
+
+    # 1. Check system Chromium-based browsers (Chrome, Chromium, Brave, Edge, Opera, Vivaldi)
+    candidates = [
+        "google-chrome", "google-chrome-stable", "google-chrome-unstable", "google-chrome-beta",
+        "chromium", "chromium-browser",
+        "brave-browser", "brave",
+        "microsoft-edge", "microsoft-edge-stable", "microsoft-edge-dev",
+        "vivaldi", "vivaldi-stable",
+        "opera"
+    ]
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            return path
+
+    # 2. Check Playwright Chromium installs
     home = os.path.expanduser("~")
     playwright_chromes = glob.glob(f"{home}/.cache/ms-playwright/chromium-*/chrome-linux*/chrome")
     if playwright_chromes:
         return sorted(playwright_chromes)[-1]
 
-    # 2. Check standard PATH binaries
-    for name in ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "brave-browser"]:
-        path = shutil.which(name)
-        if path:
-            return path
+    # 3. Check Firefox as fallback
+    firefox_path = shutil.which("firefox")
+    if firefox_path:
+        return firefox_path
 
     return None
 
@@ -201,7 +218,11 @@ def cmd_get_console_errors(port=0):
 
     ws_url = get_page_ws_url(port)
     if not ws_url:
-        print(json.dumps({"success": False, "error": f"Cannot connect to browser CDP on port {port}. Is the browser open?"}))
+        print(json.dumps({
+            "success": False,
+            "port": port,
+            "notice": f"No active browser remote debugging listener found on port {port}. If user is using an existing standard browser (e.g. Firefox/Chrome), use 'open_browser_url', 'read_screen_tree', or 'inspect_desktop_state' to interact with it, or call 'browser_launch' to start an introspected session."
+        }))
         return
 
     try:
@@ -267,7 +288,11 @@ def cmd_get_network_activity(port=0):
 
     ws_url = get_page_ws_url(port)
     if not ws_url:
-        print(json.dumps({"success": False, "error": f"Cannot connect to browser CDP on port {port}."}))
+        print(json.dumps({
+            "success": False,
+            "port": port,
+            "notice": f"No active browser remote debugging listener found on port {port}. If user is using an existing standard browser (e.g. Firefox/Chrome), use 'open_browser_url', 'read_screen_tree', or 'inspect_desktop_state' to interact with it, or call 'browser_launch' to start an introspected session."
+        }))
         return
 
     try:

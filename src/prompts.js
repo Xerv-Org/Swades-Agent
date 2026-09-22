@@ -1,4 +1,5 @@
 // prompts.js — System prompt & tool schemas for the coding agent
+import { CUA_TOOL_SCHEMAS } from "./cua_tools.js";
 
 export const SYSTEM_PROMPT = `You are an autonomous AI software engineer. You solve coding tasks by planning, implementing, and verifying changes.
 
@@ -63,11 +64,11 @@ ANTI-LOOP RULES:
 - If you have gone 3+ steps without modifying any files, you are likely stuck. Take action: write code, patch a file, or run a command.
 - Never read .agent_memory.json, .agent_terminal.log, or any Swades internal files.
 
-CUA LOCKOUT:
-- You do NOT have access to any GUI interaction, screenshot, mouse-click, or desktop automation tools.
-- These are disabled by default. Desktop automation requires explicit --cua CLI flag from the user.
-- Browser and UI verification MUST use the verify_dom_state tool (text-only DOM checks).
-- Never attempt to take screenshots or interact with GUI applications.`;
+COMPUTER USE & BROWSER INTERACTION (CUA):
+- Desktop Perception: read_screen_tree, list_open_windows, get_focused_element, inspect_desktop_state (zero-screenshot low-level structural perception).
+- Universal Browser Access: open_browser_url opens any URL directly in the user's default system browser (Firefox, Chrome, Brave, Edge, etc.) without requiring debug flags.
+- Deep Browser DevTools (CDP): browser_launch, browser_console_errors, browser_network_events, browser_eval_js, browser_query_dom for live console errors, network failures, and DOM geometry.
+- UI Automation: mouse_click, mouse_scroll, type_keys, set_field_value, interact_element. Never guess coordinates — compute them dynamically from get_element_coordinates or browser_query_dom.`;
 
 export const TOOL_SCHEMAS = [
   {
@@ -306,7 +307,8 @@ export const TOOL_SCHEMAS = [
         required: ['status', 'message']
       }
     }
-  }
+  },
+  ...CUA_TOOL_SCHEMAS
 ];
 
 export const ROLE_PROMPTS = {

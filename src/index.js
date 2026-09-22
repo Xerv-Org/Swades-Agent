@@ -10,7 +10,6 @@ import { spawn } from "node:child_process";
 import { runAgent } from "./agent.js";
 import { runDirector } from "./director.js";
 import { runCUA } from "./cua.js";
-import { runCuaAgent } from "./cua_agent.js";
 import { executeTool } from "./tools.js";
 import { callLLM, API_KEY } from "./llm.js";
 import { migrateAndCleanup } from "./cleanup.js";
@@ -296,8 +295,11 @@ async function main() {
       process.exit(1);
     }
 
+    process.env.SWADES_CUA_MODE = "true";
+    await startup(true);
+
     try {
-      await runCuaAgent(task);
+      await runAgent(task, null, null, image);
     } catch (err) {
       console.error(chalk.red(`Fatal CUA Error: ${err.message}`));
       process.exit(1);
