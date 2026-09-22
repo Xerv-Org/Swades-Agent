@@ -4,6 +4,7 @@ import json
 import os
 import glob
 import subprocess
+import re
 
 # Ensure dist-packages is available for system PyGObject / Atspi
 if "/usr/lib/python3/dist-packages" not in sys.path:
@@ -56,6 +57,8 @@ def get_node_extents(node):
         comp = node.get_component_iface()
         if comp:
             rect = comp.get_extents(Atspi.CoordType.SCREEN)
+            if rect.width <= 0 or rect.height <= 0 or rect.x < -1000 or rect.y < -1000:
+                return None
             return {
                 "x": rect.x,
                 "y": rect.y,
@@ -178,28 +181,195 @@ def cmd_dump():
     tree = get_accessible_tree(desktop)
     print(json.dumps(tree, indent=2))
 
-def cmd_list_windows():
-    desktop = Atspi.get_desktop(0)
+def get_x11_ewmh_windows():
     windows = []
-    for i in range(desktop.get_child_count()):
-        child = desktop.get_child_at_index(i)
-        if not child:
-            continue
-        try:
-            name = child.get_name() or ""
-            role = child.get_role_name() or ""
-            child_count = child.get_child_count()
-            extents = get_node_extents(child)
-            windows.append({
-                "index": i,
-                "name": name,
-                "role": role,
-                "children": child_count,
-                "geometry": extents
+    try:
+        out = subprocess.check_output(["xprop", "-root", "_NET_CLIENT_LIST"], text=True, stderr=subprocess.DEVNULL)
+        win_ids = re.findall(r"0x[0-9a-fA-F]+", out)
+        for wid in win_ids:
+            try:
+                p_out = subprocess.check_output(["xprop", "-id", wid], text=True, stderr=subprocess.DEVNULL)
+                title_match = re.search(r'_NET_WM_NAME\(UTF8_STRING\) = "(.*)"', p_out) or re.search(r'WM_NAME\(.*?\) = "(.*)"', p_out)
+                class_match = re.search(r'WM_CLASS\(STRING\) = (.*)', p_out)
+                pid_match = re.search(r'_NET_WM_PID\(CARDINAL\) = (\d+)', p_out)
+                state_match = re.search(r'_NET_WM_STATE\(ATOM\) = (.*)', p_out)
+
+                title = title_match.group(1) if title_match else ""
+                wm_class = class_match.group(1).replace('"', '') if class_match else ""
+                pid = int(pid_match.group(1)) if pid_match else None
+                states = [s.strip() for s in state_match.group(1).split(",") if s.strip()] if state_match else []
+
+                # Geometry via xwininfo
+                geo = None
+                is_viewable = True
+                try:
+                    w_out = subprocess.check_output(["xwininfo", "-id", wid], text=True, stderr=subprocess.DEVNULL)
+                    x_m = re.search(r"Absolute upper-left X:\s+(-?\d+)", w_out)
+                    y_m = re.search(r"Absolute upper-left Y:\s+(-?\d+)", w_out)
+                    w_m = re.search(r"Width:\s+(\d+)", w_out)
+                    h_m = re.search(r"Height:\s+(\d+)", w_out)
+                    if x_m and y_m and w_m and h_m:
+                        x = int(x_m.group(1))
+                        y = int(y_m.group(1))
+                        w = int(w_m.group(1))
+                        h = int(h_m.group(1))
+                        is_viewable = "Map State: IsViewable" in w_out
+                        geo = {
+                            "x": x,
+                            "y": y,
+                            "width": w,
+                            "height": h,
+                            "center_x": x + (w // 2) if w > 0 else x,
+                            "center_y": y + (h // 2) if h > 0 else y,
+                            "viewable": is_viewable
+                        }
+                except Exception:
+                    pass
+
+                # Process name and memory RSS from /proc/<pid>
+                rss_kb = None
+                proc_name = None
+                cmdline = None
+                if pid and os.path.exists(f"/proc/{pid}"):
+                    try:
+                        if os.path.exists(f"/proc/{pid}/status"):
+                            with open(f"/proc/{pid}/status") as f:
+                                for line in f:
+                                    if line.startswith("VmRSS:"):
+                                        rss_kb = int(line.split()[1])
+                                    elif line.startswith("Name:"):
+                                        proc_name = line.split()[1]
+                        if os.path.exists(f"/proc/{pid}/cmdline"):
+                            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                                raw = f.read()
+                                cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+                    except Exception:
+                        pass
+
+                windows.append({
+                    "window_id": wid,
+                    "title": title,
+                    "class": wm_class,
+                    "pid": pid,
+                    "process_name": proc_name,
+                    "command": cmdline,
+                    "rss_kb": rss_kb,
+                    "geometry": geo,
+                    "viewable": is_viewable,
+                    "states": states,
+                    "source": "x11_ewmh"
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return windows
+
+def get_proc_info_by_name(name):
+    if not name:
+        return None, None
+    try:
+        # Check running processes
+        out = subprocess.check_output(["pgrep", "-f", name], text=True, stderr=subprocess.DEVNULL)
+        pids = [int(p) for p in out.strip().split() if p.isdigit()]
+        if pids:
+            target_pid = pids[0]
+            rss_kb = None
+            if os.path.exists(f"/proc/{target_pid}/status"):
+                with open(f"/proc/{target_pid}/status") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            rss_kb = int(line.split()[1])
+                            break
+            return target_pid, rss_kb
+    except Exception:
+        pass
+    return None, None
+
+def cmd_list_windows():
+    atspi_windows = []
+    try:
+        desktop = Atspi.get_desktop(0)
+        for i in range(desktop.get_child_count()):
+            child = desktop.get_child_at_index(i)
+            if not child:
+                continue
+            try:
+                name = child.get_name() or ""
+                role = child.get_role_name() or ""
+                child_count = child.get_child_count()
+                extents = get_node_extents(child)
+                pid, rss_kb = get_proc_info_by_name(name)
+                atspi_windows.append({
+                    "index": i,
+                    "name": name,
+                    "role": role,
+                    "pid": pid,
+                    "process_name": name,
+                    "rss_kb": rss_kb,
+                    "children": child_count,
+                    "geometry": extents,
+                    "source": "atspi"
+                })
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    x11_windows = get_x11_ewmh_windows()
+
+    # Merge and deduplicate AT-SPI2 + X11/EWMH windows
+    unified = []
+    matched_x11 = set()
+
+    for aw in atspi_windows:
+        aname = (aw.get("name") or "").lower()
+        match = None
+        for idx, xw in enumerate(x11_windows):
+            if idx in matched_x11:
+                continue
+            xtitle = (xw.get("title") or "").lower()
+            xclass = (xw.get("class") or "").lower()
+            xproc = (xw.get("process_name") or "").lower()
+            if aname and (aname in xtitle or xtitle in aname or aname in xclass or aname in xproc):
+                match = xw
+                matched_x11.add(idx)
+                break
+
+        entry = dict(aw)
+        if match:
+            entry["window_id"] = match.get("window_id")
+            entry["pid"] = match.get("pid")
+            entry["process_name"] = match.get("process_name")
+            entry["rss_kb"] = match.get("rss_kb")
+            entry["title"] = match.get("title")
+            entry["class"] = match.get("class")
+            if not entry.get("geometry") and match.get("geometry"):
+                entry["geometry"] = match.get("geometry")
+            entry["viewable"] = match.get("viewable", True)
+            entry["source"] = "hybrid (atspi + x11)"
+        unified.append(entry)
+
+    # Add remaining X11 windows (such as sandboxed Snap, Flatpak, Spotify, CEF, games)
+    for idx, xw in enumerate(x11_windows):
+        if idx not in matched_x11:
+            unified.append({
+                "index": len(unified),
+                "name": xw.get("title") or xw.get("class") or xw.get("process_name") or "Window",
+                "title": xw.get("title"),
+                "class": xw.get("class"),
+                "role": "application",
+                "pid": xw.get("pid"),
+                "process_name": xw.get("process_name"),
+                "rss_kb": xw.get("rss_kb"),
+                "window_id": xw.get("window_id"),
+                "children": 0,
+                "geometry": xw.get("geometry"),
+                "viewable": xw.get("viewable", True),
+                "source": "x11_ewmh"
             })
-        except Exception:
-            continue
-    print(json.dumps(windows, indent=2))
+
+    print(json.dumps(unified, indent=2))
 
 def cmd_focused():
     desktop = Atspi.get_desktop(0)
@@ -233,49 +403,74 @@ def cmd_focused():
 def cmd_extents(target):
     desktop = Atspi.get_desktop(0)
     node = find_node_by_name_or_role(desktop, target)
-    if not node:
-        print(json.dumps({"success": False, "error": f"Element '{target}' not found"}))
-        return
+    if node:
+        extents = get_node_extents(node)
+        if extents:
+            print(json.dumps({
+                "success": True,
+                "target": target,
+                "name": node.get_name() or "",
+                "role": node.get_role_name() or "",
+                "geometry": extents,
+                "source": "atspi"
+            }, indent=2))
+            return
 
-    extents = get_node_extents(node)
-    if not extents:
-        print(json.dumps({"success": False, "error": f"Element '{target}' has no component extents"}))
-        return
+    # Fallback to X11 windows (for Spotify, Steam, Snap/Flatpak apps without AT-SPI)
+    tgt_lower = (target or "").lower()
+    x11_windows = get_x11_ewmh_windows()
+    for xw in x11_windows:
+        xtitle = (xw.get("title") or "").lower()
+        xclass = (xw.get("class") or "").lower()
+        xproc = (xw.get("process_name") or "").lower()
+        if tgt_lower in xtitle or tgt_lower in xclass or tgt_lower in xproc:
+            if xw.get("geometry"):
+                print(json.dumps({
+                    "success": True,
+                    "target": target,
+                    "name": xw.get("title") or xw.get("class"),
+                    "role": "application",
+                    "window_id": xw.get("window_id"),
+                    "pid": xw.get("pid"),
+                    "geometry": xw.get("geometry"),
+                    "source": "x11_ewmh"
+                }, indent=2))
+                return
 
-    print(json.dumps({
-        "success": True,
-        "target": target,
-        "name": node.get_name() or "",
-        "role": node.get_role_name() or "",
-        "geometry": extents
-    }, indent=2))
+    print(json.dumps({"success": False, "error": f"Element '{target}' not found in AT-SPI2 or X11 windows"}))
 
 def cmd_interact(target, action_name="click"):
     desktop = Atspi.get_desktop(0)
     node = find_node_by_name_or_role(desktop, target)
-    if not node:
-        print(json.dumps({"success": False, "error": f"Element '{target}' not found"}))
-        return
+    if node:
+        action_iface = node.get_action_iface()
+        if action_iface:
+            n = action_iface.get_n_actions()
+            for i in range(n):
+                act = action_iface.get_action_name(i)
+                if action_name.lower() in act.lower() or act.lower() in action_name.lower():
+                    ok = action_iface.do_action(i)
+                    print(json.dumps({"success": ok, "action": act, "element": node.get_name() or node.get_role_name()}))
+                    return
+            if n > 0:
+                ok = action_iface.do_action(0)
+                print(json.dumps({"success": ok, "action": action_iface.get_action_name(0), "element": node.get_name() or node.get_role_name()}))
+                return
 
-    action_iface = node.get_action_iface()
-    if not action_iface:
-        print(json.dumps({"success": False, "error": f"Element '{target}' has no actions"}))
-        return
+    # Fallback to X11 windows (click window center)
+    tgt_lower = (target or "").lower()
+    x11_windows = get_x11_ewmh_windows()
+    for xw in x11_windows:
+        xtitle = (xw.get("title") or "").lower()
+        xclass = (xw.get("class") or "").lower()
+        xproc = (xw.get("process_name") or "").lower()
+        if tgt_lower in xtitle or tgt_lower in xclass or tgt_lower in xproc:
+            geo = xw.get("geometry")
+            if geo and geo.get("center_x") and geo.get("center_y"):
+                cmd_click_coords(geo["center_x"], geo["center_y"], "left", 1)
+                return
 
-    n = action_iface.get_n_actions()
-    for i in range(n):
-        act = action_iface.get_action_name(i)
-        if action_name.lower() in act.lower() or act.lower() in action_name.lower():
-            ok = action_iface.do_action(i)
-            print(json.dumps({"success": ok, "action": act, "element": node.get_name() or node.get_role_name()}))
-            return
-
-    # Fallback to first action
-    if n > 0:
-        ok = action_iface.do_action(0)
-        print(json.dumps({"success": ok, "action": action_iface.get_action_name(0), "element": node.get_name() or node.get_role_name()}))
-    else:
-        print(json.dumps({"success": False, "error": f"No matching action '{action_name}'"}))
+    print(json.dumps({"success": False, "error": f"Element '{target}' not found in AT-SPI2 or X11 windows"}))
 
 def cmd_set_text(target, text):
     desktop = Atspi.get_desktop(0)

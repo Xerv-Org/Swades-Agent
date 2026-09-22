@@ -299,13 +299,13 @@ STACK RULES:
       return m;
     });
 
-    // 2. Window-based pruning if non-system messages grow beyond 5
+    // 2. Window-based pruning if non-system messages grow beyond 12
     const systemMsgs = sanitizedMsgs.filter(m => m.role === "system");
     const nonSystem = sanitizedMsgs.filter(m => m.role !== "system");
-    if (nonSystem.length > 5) {
+    if (nonSystem.length > 12) {
       const firstUserMsg = nonSystem[0];
       const rest = nonSystem.slice(1);
-      let sliceIdx = Math.max(0, rest.length - 4);
+      let sliceIdx = Math.max(0, rest.length - 8);
       // Ensure we don't sever a tool response from its initiating assistant tool_call
       while (sliceIdx > 0 && rest[sliceIdx].role === "tool") {
         sliceIdx--;
@@ -313,7 +313,7 @@ STACK RULES:
       const recent = rest.slice(sliceIdx);
       const middleCount = sliceIdx;
       if (middleCount > 0) {
-        const summary = `[CONTEXT COMPRESSED: ${middleCount} older turns compressed. Workspace files are up to date.]`;
+        const summary = `[CONTEXT COMPRESSED: ${middleCount} older turns compressed. System telemetry, desktop windows, and workspace state are preserved.]`;
         sanitizedMsgs = [...systemMsgs, firstUserMsg, { role: "user", content: summary }, ...recent];
       }
     }

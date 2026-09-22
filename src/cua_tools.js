@@ -50,7 +50,7 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "list_open_windows",
-      description: "List all open application windows and widgets on the desktop with their PIDs, child counts, and geometry via AT-SPI2.",
+      description: "List all open application windows and widgets on the desktop with their PIDs, child counts, geometry, and RSS memory via hybrid AT-SPI2 and X11/EWMH discovery (discovers all applications, including sandboxed Snap, Flatpak, Spotify, Chrome, Electron).",
       parameters: {
         type: "object",
         properties: {},

@@ -1562,6 +1562,7 @@ const TOOL_REGISTRY = {
   browser_eval_js: (args) => executeCuaTool("browser_eval_js", args),
   browser_query_dom: (args) => executeCuaTool("browser_query_dom", args),
   inspect_desktop_state: (args) => executeCuaTool("inspect_desktop_state", args),
+  run_os_command: runCommandTool,
 };
 
 /**
