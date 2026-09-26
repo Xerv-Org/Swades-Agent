@@ -29,7 +29,7 @@ function printHelp() {
 
   console.log(chalk.white.bold("  Execution Flags & Commands:\n"));
   console.log(chalk.green("  cua [task]          ") + "Computer Use Agent with low-level structural perception (CDP, AT-SPI2, /proc)");
-  console.log(chalk.green("  cua --hud           ") + "Launch interactive local Web HUD overlay (http://localhost:6081)");
+  console.log(chalk.green("  cua --hud           ") + "Launch native on-screen floating desktop HUD overlay (always-on-top)");
   console.log(chalk.green("  --cua, -c           ") + "Flag equivalent for CUA mode");
   console.log(chalk.green("  --orchestrated, -o  ") + "Multi-agent orchestrated pipeline with dependency graphs & debate");
   console.log(chalk.green("  --autonomous, -a    ") + "Hint: start in Director loop (agent can escalate on its own anyway)");
@@ -272,11 +272,12 @@ async function main() {
   // ---- CUA mode: swades cua / swades --cua / swades cua --hud ----
   if (isCUA) {
     if (hasHudFlag) {
-      console.log(chalk.cyan.bold("\n  🚀 Launching Swades CUA Interactive Web HUD..."));
-      console.log(chalk.dim("  Desktop Stream: 100% read-only locked (pointer-events: none)"));
-      console.log(chalk.green("  Access URL: http://localhost:6081\n"));
-      const overlayPath = resolve(fileURLToPath(import.meta.url), "../web_chat_overlay.py");
-      const hudProc = spawn("python3", [overlayPath], { stdio: "inherit" });
+      console.log(chalk.cyan.bold("\n  🚀 Launching Swades Native Floating Desktop HUD Overlay..."));
+      console.log(chalk.dim("  Window: Always-On-Top (-topmost) Native Desktop HUD"));
+      console.log(chalk.green("  Status: Active on DISPLAY=" + (process.env.DISPLAY || ":0") + "\n"));
+      const desktopHudPath = resolve(fileURLToPath(import.meta.url), "../desktop_hud_overlay.py");
+
+      const hudProc = spawn("python3", [desktopHudPath], { stdio: "inherit" });
       hudProc.on("close", (code) => process.exit(code || 0));
       return;
     }
@@ -285,7 +286,7 @@ async function main() {
       console.log(chalk.yellow("\n  🚀 Swades CUA (Computer Use Agent) — Native Low-Level OS Perception"));
       console.log(chalk.white("  Usage:"));
       console.log(chalk.green('    swades cua "<task>"') + chalk.dim("     Autonomous ReAct loop (CDP, AT-SPI2, /proc)"));
-      console.log(chalk.green('    swades cua --hud') + chalk.dim("        Launch local Web HUD overlay (http://localhost:6081)"));
+      console.log(chalk.green('    swades cua --hud') + chalk.dim("        Launch native on-screen floating desktop HUD overlay"));
       console.log(chalk.dim('  Example: swades cua "Inspect browser console errors and list open windows"\n'));
       process.exit(0);
     }
@@ -297,6 +298,15 @@ async function main() {
 
     process.env.SWADES_CUA_MODE = "true";
     await startup(true);
+
+    // Auto-launch Desktop HUD Overlay so user sees live visual panel on screen
+    if (process.env.DISPLAY) {
+      try {
+        const desktopHudPath = resolve(fileURLToPath(import.meta.url), "../desktop_hud_overlay.py");
+        const dHud = spawn("python3", [desktopHudPath], { stdio: "ignore", detached: true });
+        dHud.unref();
+      } catch (_) {}
+    }
 
     try {
       await runAgent(task, null, null, image);

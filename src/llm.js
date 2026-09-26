@@ -212,7 +212,19 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
     params.tool_choice = "auto";
   }
 
-  const stream = await getClient().chat.completions.create(params);
+  const controller = new AbortController();
+  const LLM_STREAM_TIMEOUT = parseInt(process.env.LLM_TIMEOUT_MS) || 10000;
+  let streamTimer = setTimeout(() => {
+    controller.abort(new Error(`LLM streaming initial response timed out after ${LLM_STREAM_TIMEOUT / 1000}s`));
+  }, LLM_STREAM_TIMEOUT);
+
+  let stream;
+  try {
+    stream = await getClient().chat.completions.create(params, { signal: controller.signal });
+  } catch (err) {
+    clearTimeout(streamTimer);
+    throw err;
+  }
 
   // ---- Reconstruct full message from streaming chunks ----
   let contentBuf = "";
@@ -220,9 +232,15 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
   // tool_calls accumulator: index → { id, type, function: { name, arguments } }
   const toolCallMap = {};
 
-  for await (const chunk of stream) {
-    const delta = chunk.choices?.[0]?.delta;
-    if (!delta) continue;
+  try {
+    for await (const chunk of stream) {
+      clearTimeout(streamTimer);
+      streamTimer = setTimeout(() => {
+        controller.abort(new Error("LLM stream chunk stalled for >10s"));
+      }, 10000);
+
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) continue;
 
     // --- Reasoning chunks (for reasoning models: gpt-oss-20b, deepseek-r1, etc.) ---
     const reasoningText = delta.reasoning || delta.reasoning_content;
@@ -262,6 +280,9 @@ async function _callLLMInternal(messages, tools, onChunk, model) {
       }
     }
   }
+} finally {
+  clearTimeout(streamTimer);
+}
 
   // Build the assistant message object
   const toolCalls = Object.values(toolCallMap);

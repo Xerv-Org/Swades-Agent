@@ -16,18 +16,18 @@ function askQuestion(query) {
 }
 
 export async function initApprovalFlow() {
+  // If NON_INTERACTIVE or non-TTY — always auto, save and return immediately
+  if (!process.stdin.isTTY || process.env.NON_INTERACTIVE || process.env.SWADES_AUTO_APPROVE === "true") {
+    await updatePreferences({ approvalMode: 'auto' });
+    return 'auto';
+  }
+
   await loadMemory();
   const prefs = getPreferences();
-  
+
   if (prefs && prefs.approvalMode) {
     console.log(chalk.green(`✓ Using saved approval mode: ${prefs.approvalMode}`));
     return prefs.approvalMode;
-  }
-
-  if (!process.stdin.isTTY || process.env.NON_INTERACTIVE) {
-    console.log(chalk.yellow('Non-interactive environment detected. Defaulting to auto-approve.'));
-    await updatePreferences({ approvalMode: 'auto' });
-    return 'auto';
   }
 
   console.log(chalk.cyan('\n🔒 Approval Mode (saved for future sessions):'));

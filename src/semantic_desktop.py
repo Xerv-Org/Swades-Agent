@@ -5,6 +5,9 @@ import os
 import glob
 import subprocess
 import re
+import warnings
+
+warnings.filterwarnings("ignore")
 
 # Ensure dist-packages is available for system PyGObject / Atspi
 if "/usr/lib/python3/dist-packages" not in sys.path:
@@ -12,18 +15,11 @@ if "/usr/lib/python3/dist-packages" not in sys.path:
 
 # Dynamic Display & Auth Auto-Discovery
 def ensure_display_and_auth():
-    if "DISPLAY" not in os.environ or not os.environ["DISPLAY"]:
-        os.environ["DISPLAY"] = ":0"
-    
-    # Check for Mutter Xwayland auth cookie if not set
-    if "XAUTHORITY" not in os.environ or not os.path.exists(os.environ.get("XAUTHORITY", "")):
-        uid = os.getuid()
-        mutter_auths = glob.glob(f"/run/user/{uid}/.mutter-Xwaylandauth.*")
-        if mutter_auths:
-            latest_auth = sorted(mutter_auths, key=os.path.getmtime)[-1]
-            os.environ["XAUTHORITY"] = latest_auth
-        elif os.path.exists(os.path.expanduser("~/.Xauthority")):
-            os.environ["XAUTHORITY"] = os.path.expanduser("~/.Xauthority")
+    if not os.environ.get("DISPLAY"):
+        if os.path.exists("/tmp/.X11-unix/X99"):
+            os.environ["DISPLAY"] = ":99"
+        else:
+            os.environ["DISPLAY"] = ":0"
 
 ensure_display_and_auth()
 
@@ -71,74 +67,81 @@ def get_node_extents(node):
         pass
     return None
 
-def get_accessible_tree(node, max_depth=5, current_depth=0):
-    if not node or current_depth > max_depth:
-        return None
+def get_compact_accessible_tree(node, max_elements=60, current_depth=0, max_depth=10, elements=None):
+    if elements is None:
+        elements = []
+    if not node or current_depth > max_depth or len(elements) >= max_elements:
+        return elements
 
     try:
-        role = node.get_role_name() or "unknown"
-        name = node.get_name() or ""
+        role = (node.get_role_name() or "unknown").lower()
+        name = (node.get_name() or "").strip()
         states = get_node_states(node)
 
-        # Skip non-visible noise to save context window
-        if "visible" not in states and current_depth > 1:
-            return None
+        # Extract text for text-like nodes
+        text = ""
+        if any(r in role for r in ["text", "entry", "label", "paragraph", "heading", "value"]):
+            try:
+                tif = node.get_text_iface()
+                if tif:
+                    c = tif.get_character_count()
+                    if c > 0:
+                        text = Atspi.Text.get_text(tif, 0, min(c, 300)).strip()
+            except Exception:
+                pass
 
-        tree = {
-            "id": f"{role}:{name}" if name else f"{role}",
-            "role": role,
-            "name": name,
-            "states": states
-        }
+        # Extract actions for interactive nodes
+        actions = []
+        if any(r in role for r in ["button", "menu", "entry", "link", "tab", "item", "check", "radio", "page", "frame", "window"]):
+            try:
+                aif = node.get_action_iface()
+                if aif:
+                    for i in range(aif.get_n_actions()):
+                        aname = Atspi.Action.get_action_name(aif, i)
+                        if aname:
+                            actions.append(aname)
+            except Exception:
+                pass
 
-        # Available actions
-        try:
-            action_iface = node.get_action_iface()
-            if action_iface:
-                n_actions = action_iface.get_n_actions()
-                actions = []
-                for i in range(n_actions):
-                    act_name = action_iface.get_action_name(i)
-                    if act_name:
-                        actions.append(act_name)
-                if actions:
-                    tree["actions"] = actions
-        except Exception:
-            pass
+        # Extract geometry
+        geom = None
+        if name or text or actions or role in ["entry", "text", "button", "tab", "page", "frame", "window"]:
+            try:
+                cif = node.get_component_iface()
+                if cif:
+                    r = cif.get_extents(Atspi.CoordType.SCREEN)
+                    if r.width > 0 and r.height > 0:
+                        geom = {"x": r.x, "y": r.y, "w": r.width, "h": r.height, "cx": r.x + r.width // 2, "cy": r.y + r.height // 2}
+            except Exception:
+                pass
 
-        # Extents (bounding box)
-        extents = get_node_extents(node)
-        if extents and (extents["width"] > 0 or extents["height"] > 0):
-            tree["geometry"] = extents
+        # Add semantic node if it has meaningful name/text/actions or is an interactive role
+        if name or text or actions or role in ["entry", "text", "button", "tab", "page", "frame", "window", "dialog"]:
+            item = {"role": role}
+            if name:
+                item["name"] = name
+            if text and text != name:
+                item["text"] = text
+            if actions:
+                item["actions"] = actions
+            if geom:
+                item["bounds"] = geom
+            elements.append(item)
 
-        # Value / text
-        try:
-            text_iface = node.get_text_iface()
-            if text_iface:
-                char_count = text_iface.get_character_count()
-                if char_count > 0:
-                    tree["text"] = text_iface.get_text(0, min(char_count, 1000))
-        except Exception:
-            pass
-
-        # Children
-        child_count = node.get_child_count()
-        if child_count > 0:
-            children = []
-            for i in range(child_count):
-                child = node.get_child_at_index(i)
-                child_data = get_accessible_tree(child, max_depth, current_depth + 1)
-                if child_data:
-                    children.append(child_data)
-            if children:
-                tree["children"] = children
-
-        return tree
+        # Recurse children
+        cc = node.get_child_count()
+        for i in range(min(cc, 25)):
+            get_compact_accessible_tree(node.get_child_at_index(i), max_elements, current_depth + 1, max_depth, elements)
     except Exception:
-        return None
+        pass
+    return elements
 
-def find_node_by_name_or_role(node, target_name, target_role=None):
-    if not node:
+def get_accessible_tree(node, max_depth=7, current_depth=0):
+    elements = get_compact_accessible_tree(node, max_elements=50, max_depth=max_depth)
+    return elements
+
+def find_node_by_name_or_role(node, target_name, target_role=None, depth=0, max_depth=8):
+    if not node or depth > max_depth:
         return None
     try:
         name = node.get_name() or ""
@@ -151,8 +154,8 @@ def find_node_by_name_or_role(node, target_name, target_role=None):
             return node
 
         child_count = node.get_child_count()
-        for i in range(child_count):
-            found = find_node_by_name_or_role(node.get_child_at_index(i), target_name, target_role)
+        for i in range(min(child_count, 20)):
+            found = find_node_by_name_or_role(node.get_child_at_index(i), target_name, target_role, depth + 1, max_depth)
             if found:
                 return found
     except Exception:
@@ -163,12 +166,20 @@ def find_focused_node(node, depth=0, max_depth=8):
     if not node or depth > max_depth:
         return None
     try:
+        name = (node.get_name() or "").lower()
+        role = (node.get_role_name() or "").lower()
+        if any(s in name or s in role for s in ["xfwm4", "xfce4-panel", "xfdesktop"]):
+            return None
         states = get_node_states(node)
         if "focused" in states:
-            return node
+            ext = get_node_extents(node)
+            if ext and ext.get("x", 0) < 0 and ext.get("y", 0) < 0:
+                pass
+            else:
+                return node
 
         child_count = node.get_child_count()
-        for i in range(child_count):
+        for i in range(min(child_count, 20)):
             res = find_focused_node(node.get_child_at_index(i), depth + 1, max_depth)
             if res:
                 return res
@@ -176,9 +187,81 @@ def find_focused_node(node, depth=0, max_depth=8):
         pass
     return None
 
-def cmd_dump():
+
+def get_browser_cdp_elements():
+    try:
+        import urllib.request, websocket
+        tabs = json.loads(urllib.request.urlopen("http://127.0.0.1:9222/json", timeout=1.5).read().decode("utf-8"))
+        page_tabs = [t for t in tabs if t.get("type") == "page"]
+        if not page_tabs:
+            return []
+        
+        ws_url = page_tabs[0]["webSocketDebuggerUrl"]
+        ws = websocket.create_connection(ws_url, timeout=2)
+        js_code = """(function() {
+            var items = [];
+            var title = document.title;
+            if (title) items.push({role: 'heading', name: title, text: title});
+            var elements = document.querySelectorAll('h1, h2, h3, h4, p, [data-async-context], div[data-content-feature], .g, [role="heading"], [role="link"], [role="article"]');
+            var seen = new Set();
+            for (var el of elements) {
+                var txt = (el.innerText || el.textContent || '').trim();
+                if (txt && txt.length > 5 && !seen.has(txt)) {
+                    seen.add(txt);
+                    var tag = el.tagName.toLowerCase();
+                    var role = (tag.startsWith('h') ? 'heading' : (tag === 'p' ? 'paragraph' : 'section'));
+                    var rect = el.getBoundingClientRect();
+                    items.push({
+                        role: role,
+                        name: txt.slice(0, 120),
+                        text: txt.slice(0, 600),
+                        bounds: {
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            w: Math.round(rect.width),
+                            h: Math.round(rect.height),
+                            cx: Math.round(rect.x + rect.width / 2),
+                            cy: Math.round(rect.y + rect.height / 2)
+                        }
+                    });
+                    if (items.length >= 35) break;
+                }
+            }
+            return items;
+        })()"""
+        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": js_code, "returnByValue": True}}))
+        res = json.loads(ws.recv())
+        ws.close()
+        items = res.get("result", {}).get("result", {}).get("value", [])
+        return items if isinstance(items, list) else []
+    except Exception:
+        return []
+
+def cmd_dump(target=""):
     desktop = Atspi.get_desktop(0)
-    tree = get_accessible_tree(desktop)
+    node = None
+    if target:
+        node = find_node_by_name_or_role(desktop, target, max_depth=30)
+    if not node:
+        node = find_focused_node(desktop)
+        curr = node
+        while curr:
+            role = (curr.get_role_name() or "").lower()
+            if role in ["window", "frame", "application", "dialog"]:
+                node = curr
+                break
+            try:
+                curr = curr.get_parent()
+            except Exception:
+                break
+    if not node:
+        node = desktop
+
+    tree = get_accessible_tree(node, max_depth=7)
+    cdp_items = get_browser_cdp_elements()
+    if cdp_items:
+        if len(tree) <= 3 or any("chrom" in (e.get("name") or "").lower() for e in tree):
+            tree = tree + cdp_items
     print(json.dumps(tree, indent=2))
 
 def get_x11_ewmh_windows():
@@ -298,11 +381,50 @@ def cmd_list_windows():
                 name = child.get_name() or ""
                 role = child.get_role_name() or ""
                 child_count = child.get_child_count()
-                extents = get_node_extents(child)
+                if child_count == 0:
+                    continue
+                sub_titles = []
+                for c_idx in range(child_count):
+                    try:
+                        c_node = child.get_child_at_index(c_idx)
+                        if c_node:
+                            c_title = c_node.get_name() or ""
+                            if c_title:
+                                sub_titles.append(c_title)
+                    except Exception:
+                        pass
+                
+                # Fast tab extraction (only for tabbed editors/browsers, max_d=6)
+                all_tabs = sub_titles
+                name_lower = name.lower()
+                role_lower = role.lower()
+                if any(k in name_lower or k in role_lower for k in ["editor", "firefox", "chrome", "brave", "terminal", "gedit", "code"]):
+                    def _find_tabs(n, depth=0, max_d=6):
+                        res = []
+                        if not n or depth > max_d:
+                            return res
+                        try:
+                            r = (n.get_role_name() or "").lower()
+                            nm = n.get_name() or ""
+                            if (r in ["page tab", "tab", "page"] or "tab" in r) and nm:
+                                res.append(nm)
+                            cc = n.get_child_count()
+                            for k in range(min(cc, 15)):
+                                res.extend(_find_tabs(n.get_child_at_index(k), depth + 1, max_d))
+                        except Exception:
+                            pass
+                        return res
+
+                    deep_tabs = _find_tabs(child)
+                    all_tabs = list(dict.fromkeys(sub_titles + deep_tabs))
+                window_title = ", ".join(all_tabs) if all_tabs else name
                 pid, rss_kb = get_proc_info_by_name(name)
+                extents = get_node_extents(child)
                 atspi_windows.append({
                     "index": i,
                     "name": name,
+                    "title": window_title,
+                    "open_tabs_or_windows": all_tabs,
                     "role": role,
                     "pid": pid,
                     "process_name": name,
@@ -369,7 +491,19 @@ def cmd_list_windows():
                 "source": "x11_ewmh"
             })
 
-    print(json.dumps(unified, indent=2))
+    # Filter out internal desktop infrastructure
+    SYSTEM_CLASSES = {"xfwm4", "xfce4-panel", "xfdesktop", "desktop", "mutter", "gnome-shell", "polybar", "kwin", "swades_desktop_hud", "swades ai copilot", "wrapper-2.0"}
+    filtered_unified = []
+    for w in unified:
+        w_name = (w.get("name") or "").lower()
+        w_title = (w.get("title") or "").lower()
+        w_class = (w.get("class") or "").lower()
+        is_sys = any(s in w_name or s in w_title or s in w_class for s in SYSTEM_CLASSES)
+        w["is_system"] = is_sys
+        if not is_sys:
+            filtered_unified.append(w)
+
+    print(json.dumps(filtered_unified if filtered_unified else [w for w in unified if w.get("viewable")], indent=2))
 
 def cmd_focused():
     desktop = Atspi.get_desktop(0)
@@ -402,7 +536,13 @@ def cmd_focused():
 
 def cmd_extents(target):
     desktop = Atspi.get_desktop(0)
-    node = find_node_by_name_or_role(desktop, target)
+    node = None
+    focused = find_focused_node(desktop, max_depth=15)
+    if focused:
+        node = find_node_by_name_or_role(focused, target, max_depth=15)
+    if not node:
+        node = find_node_by_name_or_role(desktop, target, max_depth=15)
+
     if node:
         extents = get_node_extents(node)
         if extents:
@@ -472,24 +612,126 @@ def cmd_interact(target, action_name="click"):
 
     print(json.dumps({"success": False, "error": f"Element '{target}' not found in AT-SPI2 or X11 windows"}))
 
-def cmd_set_text(target, text):
+def find_editable_node(node, depth=0, max_depth=30):
+    if not node or depth > max_depth:
+        return None
+    try:
+        if node.get_editable_text_iface():
+            return node
+        for i in range(node.get_child_count()):
+            res = find_editable_node(node.get_child_at_index(i), depth + 1, max_depth)
+            if res:
+                return res
+    except Exception:
+        pass
+    return None
+
+def _do_save():
+    """Triple-redundancy save: AT-SPI page.save action → synthetic keysym → pyautogui."""
+    import time
+    saved = False
+    try:
+        desktop = Atspi.get_desktop(0)
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            if app:
+                for j in range(app.get_child_count()):
+                    win = app.get_child_at_index(j)
+                    act = win.get_action_iface() if win else None
+                    if act:
+                        for a_idx in range(act.get_n_actions()):
+                            a_name = Atspi.Action.get_action_name(act, a_idx)
+                            if a_name in ["page.save", "win.save", "save"]:
+                                act.do_action(a_idx)
+                                saved = True
+                                break
+                    if saved:
+                        break
+            if saved:
+                break
+    except Exception:
+        pass
+    try:
+        Atspi.generate_keyboard_event(65507, None, Atspi.KeySynthType.PRESS)
+        time.sleep(0.02)
+        Atspi.generate_keyboard_event(115, "s", Atspi.KeySynthType.PRESSRELEASE)
+        time.sleep(0.02)
+        Atspi.generate_keyboard_event(65507, None, Atspi.KeySynthType.RELEASE)
+    except Exception:
+        pass
+    try:
+        import pyautogui
+        pyautogui.hotkey("ctrl", "s")
+    except Exception:
+        pass
+    return saved
+
+def cmd_set_text(target, text, auto_save=False):
     desktop = Atspi.get_desktop(0)
-    node = find_node_by_name_or_role(desktop, target, "text")
-    if not node:
-        node = find_node_by_name_or_role(desktop, target, "entry")
-    if not node:
-        node = find_node_by_name_or_role(desktop, target)
-    if not node:
-        print(json.dumps({"success": False, "error": f"Element '{target}' not found"}))
-        return
+    node = None
 
-    editable = node.get_editable_text_iface()
-    if not editable:
-        print(json.dumps({"success": False, "error": f"Element '{target}' is not editable"}))
-        return
+    # 1. If target specified, try finding target window/app or element
+    if target:
+        for i in range(desktop.get_child_count()):
+            child = desktop.get_child_at_index(i)
+            if child:
+                found = None
+                if target.lower() in (child.get_name() or "").lower():
+                    found = child
+                else:
+                    for j in range(child.get_child_count()):
+                        w_sub = child.get_child_at_index(j)
+                        if w_sub and target.lower() in (w_sub.get_name() or "").lower():
+                            found = w_sub
+                            break
+                if found:
+                    node = find_editable_node(found, max_depth=30)
+                    if node:
+                        break
 
-    ok = editable.set_text_contents(text)
-    print(json.dumps({"success": ok, "text": text, "element": node.get_name() or node.get_role_name()}))
+        if not node:
+            node = find_node_by_name_or_role(desktop, target, "text", max_depth=30)
+        if not node:
+            node = find_node_by_name_or_role(desktop, target, "entry", max_depth=30)
+        if not node:
+            node = find_node_by_name_or_role(desktop, target, max_depth=30)
+
+    # 2. Try finding editable inside focused window or desktop
+    if not node:
+        focused = find_focused_node(desktop)
+        if focused:
+            node = find_editable_node(focused, max_depth=30)
+
+    # 3. Try finding any editable on desktop (e.g. active text editor buffer)
+    if not node:
+        for i in range(desktop.get_child_count()):
+            child = desktop.get_child_at_index(i)
+            if child:
+                cname = (child.get_name() or "").lower()
+                if any(ed_name in cname for ed_name in ["editor", "text", "notepad", "writer"]):
+                    node = find_editable_node(child, max_depth=30)
+                    if node:
+                        break
+
+    if not node:
+        node = find_editable_node(desktop, max_depth=30)
+
+    if node:
+        try:
+            editable = node.get_editable_text_iface()
+            if editable:
+                ok = editable.set_text_contents(text)
+                saved = _do_save() if auto_save else None
+                print(json.dumps({"success": ok, "text": text, "element": node.get_name() or node.get_role_name(), "source": "atspi", "saved": saved}))
+                return
+        except Exception:
+            pass
+
+    # Fallback to typing into active window
+    cmd_type_keys(text, False)
+    if auto_save:
+        _do_save()
+
 
 def cmd_mouse_pos():
     try:
@@ -509,27 +751,111 @@ def cmd_click_coords(x, y, button="left", clicks=1):
         print(json.dumps({"success": False, "error": str(e)}))
 
 def cmd_type_keys(keys, is_shortcut=False):
+    import time
+    try:
+        lower = keys.strip().lower()
+
+        # Shortcut detection
+        is_sc = is_shortcut or "+" in keys or lower in ["return", "enter", "tab", "escape", "space", "backspace", "up", "down", "left", "right"]
+        if is_sc:
+            parts = [p.strip().lower() for p in keys.split("+")]
+            key_map = {"enter": "Return", "return": "Return", "ctrl": "ctrl", "alt": "alt", "shift": "shift", "esc": "Escape", "tab": "Tab", "space": "space"}
+            xdo_parts = "+".join([key_map.get(p, p) for p in parts])
+            
+            try:
+                subprocess.run(["xdotool", "key", "--clearmodifiers", xdo_parts], check=True, stderr=subprocess.DEVNULL)
+                print(json.dumps({"success": True, "hotkey": parts, "source": "xdotool"}))
+                return
+            except Exception:
+                pass
+            
+            import pyautogui
+            mapped = [p if p != "return" else "enter" for p in parts]
+            pyautogui.hotkey(*mapped)
+            print(json.dumps({"success": True, "hotkey": mapped, "source": "pyautogui"}))
+            return
+
+        if any(ord(c) > 127 for c in keys):
+            try:
+                import tkinter as tk
+                r = tk.Tk()
+                r.withdraw()
+                r.clipboard_clear()
+                r.clipboard_append(keys)
+                r.update()
+                r.destroy()
+                time.sleep(0.05)
+                subprocess.run(["xdotool", "key", "--clearmodifiers", "ctrl+v"], stderr=subprocess.DEVNULL)
+                print(json.dumps({"success": True, "typed": keys, "method": "clipboard_paste"}))
+                return
+            except Exception:
+                pass
+
+        try:
+            subprocess.run(["xdotool", "type", "--delay", "15", "--", keys], check=True, stderr=subprocess.DEVNULL)
+            print(json.dumps({"success": True, "typed": keys, "method": "xdotool"}))
+            return
+        except Exception:
+            pass
+
+        import pyautogui
+        pyautogui.write(keys, interval=0.01)
+        print(json.dumps({"success": True, "typed": keys, "method": "pyautogui"}))
+    except Exception as e:
+        print(json.dumps({"success": False, "error": str(e)}))
+
+
+def cmd_browser_type(text, send=False, click_offset_y=-80):
+    """
+    For web apps in Firefox/Chrome: focus the browser, click near the bottom of the window
+    (where chat inputs typically live), type text, optionally press Enter to send.
+    Falls back to AT-SPI set_text if a focusable input is found.
+    """
+    import time
     try:
         import pyautogui
-        if is_shortcut or "+" in keys or keys in ["Return", "enter", "tab", "escape", "space", "backspace"]:
-            parts = [p.strip().lower() for p in keys.split("+")]
-            # Map common names
-            key_map = {"enter": "return", "ctrl": "ctrl", "alt": "alt", "shift": "shift"}
-            mapped = [key_map.get(p, p) for p in parts]
-            pyautogui.hotkey(*mapped)
-            print(json.dumps({"success": True, "hotkey": mapped}))
-        else:
-            pyautogui.write(keys, interval=0.01)
-            print(json.dumps({"success": True, "typed": keys}))
+        # Get screen dimensions
+        sw, sh = pyautogui.size()
+        # Click bottom-center of screen (chat input zone for most web chat apps)
+        cx = sw // 2
+        cy = sh + int(click_offset_y)  # e.g. 80px from bottom
+        pyautogui.click(cx, cy)
+        time.sleep(0.3)
+        # Clear existing text and type message
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.1)
+        pyautogui.write(text, interval=0.02)
+        if send:
+            time.sleep(0.1)
+            pyautogui.press("enter")
+        print(json.dumps({"success": True, "text": text, "sent": send, "clicked": [cx, cy]}))
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
 
 def cmd_mouse_scroll(clicks=5, direction="down"):
+    import subprocess
+    import time
+    try:
+        # Move cursor to center of active window or screen (960, 540)
+        subprocess.run(["xdotool", "mousemove", "960", "540"], stderr=subprocess.DEVNULL)
+        time.sleep(0.05)
+        
+        btn = "5" if direction == "down" else "4"
+        num = int(clicks) if clicks else 5
+        for _ in range(num):
+            subprocess.run(["xdotool", "click", btn], stderr=subprocess.DEVNULL)
+            time.sleep(0.03)
+
+        print(json.dumps({"success": True, "direction": direction, "clicks": num, "source": "xdotool"}))
+        return
+    except Exception:
+        pass
+
     try:
         import pyautogui
         amount = -int(clicks) if direction == "down" else int(clicks)
         pyautogui.scroll(amount)
-        print(json.dumps({"success": True, "direction": direction, "clicks": int(clicks)}))
+        print(json.dumps({"success": True, "direction": direction, "clicks": int(clicks), "source": "pyautogui"}))
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
 
@@ -542,49 +868,339 @@ def cmd_update_scratchpad(status, notes):
         json.dump(state, f, indent=2)
     print(json.dumps({"success": True, "scratchpad": state}))
 
+def cmd_focus_window(title):
+    if not title:
+        print(json.dumps({"success": False, "error": "Title required"}))
+        return
+    title_lower = title.lower()
+    
+    # 1. Try xdotool (fastest & robust X11 input focus)
+    try:
+        out = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--name", title], text=True, stderr=subprocess.DEVNULL)
+        wids = [w.strip() for w in out.splitlines() if w.strip()]
+        if not wids:
+            out = subprocess.check_output(["xdotool", "search", "--name", title], text=True, stderr=subprocess.DEVNULL)
+            wids = [w.strip() for w in out.splitlines() if w.strip()]
+        if not wids:
+            out = subprocess.check_output(["xdotool", "search", "--class", title], text=True, stderr=subprocess.DEVNULL)
+            wids = [w.strip() for w in out.splitlines() if w.strip()]
+        if wids:
+            wid = wids[0]
+            subprocess.run(["xdotool", "windowactivate", "--sync", wid], stderr=subprocess.DEVNULL)
+            subprocess.run(["xdotool", "windowfocus", "--sync", wid], stderr=subprocess.DEVNULL)
+            subprocess.run(["xdotool", "windowraise", wid], stderr=subprocess.DEVNULL)
+            w_name = subprocess.check_output(["xdotool", "getwindowname", wid], text=True, stderr=subprocess.DEVNULL).strip()
+            print(json.dumps({"success": True, "focused": w_name or title, "window_id": wid, "source": "xdotool"}))
+            return
+    except Exception:
+        pass
+
+    # 2. Try X11 / EWMH
+    try:
+        from Xlib import X, display, protocol
+        d = display.Display()
+        root = d.screen().root
+        windows = get_x11_ewmh_windows()
+        for w in windows:
+            if title_lower in (w.get("title") or "").lower() or title_lower in (w.get("class") or "").lower():
+                wid = int(w["window_id"], 16)
+                win = d.create_resource_object("window", wid)
+                win.map()
+                win.raise_window()
+                net_active = d.intern_atom("_NET_ACTIVE_WINDOW")
+                data = [1, X.CurrentTime, 0, 0, 0]
+                ev = protocol.event.ClientMessage(window=win, client_type=net_active, data=(32, data))
+                root.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+                d.set_input_focus(win, X.RevertToParent, X.CurrentTime)
+                d.sync()
+                subprocess.run(["xdotool", "windowactivate", "--sync", str(wid)], stderr=subprocess.DEVNULL)
+                print(json.dumps({"success": True, "focused": w.get("title"), "source": "x11"}))
+                return
+    except Exception:
+        pass
+
+    print(json.dumps({"success": False, "error": f"Window '{title}' not found"}))
+
+
+def cmd_window_control(title, action):
+    title_lower = (title or "").lower()
+    if action == "close" and title_lower in ["all", "all windows", "all apps", "everything"]:
+        try:
+            # Gracefully close all user applications
+            subprocess.run(["pkill", "-f", "chromium|chrome|firefox|gedit|kate|code|mousepad|leafpad|terminal|xterm"], check=False)
+            print(json.dumps({"success": True, "action": "close_all_user_apps"}))
+            return
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}))
+            return
+    try:
+        from Xlib import X, display, protocol
+        d = display.Display()
+        root = d.screen().root
+        windows = get_x11_ewmh_windows()
+        for w in windows:
+            if title_lower in (w.get("title") or "").lower() or title_lower in (w.get("class") or "").lower():
+                wid = int(w["window_id"], 16)
+                win = d.create_resource_object('window', wid)
+                if action == "close":
+                    net_close = d.intern_atom('_NET_CLOSE_WINDOW')
+                    ev = protocol.event.ClientMessage(window=win, client_type=net_close, data=(32, [X.CurrentTime, 2, 0, 0, 0]))
+                    root.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+                    d.sync()
+                    print(json.dumps({"success": True, "action": "close", "target": w.get("title")}))
+                    return
+                elif action == "minimize":
+                    win.unmap()
+                    d.sync()
+                    print(json.dumps({"success": True, "action": "minimize", "target": w.get("title")}))
+                    return
+                elif action == "maximize":
+                    win.map()
+                    win.raise_window()
+                    d.sync()
+                    print(json.dumps({"success": True, "action": "maximize", "target": w.get("title")}))
+                    return
+    except Exception:
+        pass
+
+    if action == "close" and title:
+        try:
+            subprocess.run(["pkill", "-f", title], check=False)
+            print(json.dumps({"success": True, "action": "close", "target": title, "source": "pkill"}))
+            return
+        except Exception:
+            pass
+
+    print(json.dumps({"success": False, "error": f"Could not perform '{action}' on '{title}'"}))
+
+def cmd_system_info():
+    try:
+        import psutil
+        vmem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        disk = psutil.disk_usage('/')
+        load = os.getloadavg() if hasattr(os, 'getloadavg') else [0, 0, 0]
+        
+        top_procs = []
+        for p in sorted(psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']), 
+                         key=lambda x: (x.info.get('memory_percent') or 0), reverse=True)[:8]:
+            try:
+                top_procs.append({
+                    "pid": p.info['pid'],
+                    "name": p.info['name'],
+                    "cpu_percent": p.info['cpu_percent'],
+                    "mem_percent": round(p.info['memory_percent'] or 0, 1),
+                })
+            except Exception:
+                continue
+
+        info = {
+            "cpu": {
+                "percent": psutil.cpu_percent(interval=0.1),
+                "cores": psutil.cpu_count(logical=True),
+                "load_avg": [round(x, 2) for x in load]
+            },
+            "memory": {
+                "total_gb": round(vmem.total / (1024**3), 2),
+                "used_gb": round(vmem.used / (1024**3), 2),
+                "available_gb": round(vmem.available / (1024**3), 2),
+                "percent": vmem.percent
+            },
+            "disk": {
+                "total_gb": round(disk.total / (1024**3), 2),
+                "free_gb": round(disk.free / (1024**3), 2),
+                "percent": disk.percent
+            },
+            "top_processes": top_procs
+        }
+        print(json.dumps(info, indent=2))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+
+def cmd_manage_process(action="list", target=""):
+    try:
+        import psutil
+        if action == "list" or not target:
+            procs = []
+            for p in sorted(psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status']), 
+                             key=lambda x: (x.info.get('cpu_percent') or 0), reverse=True)[:15]:
+                try:
+                    procs.append(p.info)
+                except Exception:
+                    continue
+            print(json.dumps({"processes": procs}, indent=2))
+            return
+
+        if action == "search":
+            results = []
+            target_lower = target.lower()
+            for p in psutil.process_iter(['pid', 'name', 'cmdline', 'memory_percent']):
+                try:
+                    name = p.info['name'] or ''
+                    cmd = ' '.join(p.info.get('cmdline') or [])
+                    if target_lower in name.lower() or target_lower in cmd.lower():
+                        results.append(p.info)
+                except Exception:
+                    continue
+            print(json.dumps({"matches": results}, indent=2))
+            return
+
+        if action == "kill":
+            protected = ['systemd', 'gnome-shell', 'Xorg', 'Xwayland', 'dbus', 'pipewire', 'init']
+            target_pid = int(target) if target.isdigit() else None
+            killed = []
+            for p in psutil.process_iter(['pid', 'name']):
+                try:
+                    if (target_pid and p.info['pid'] == target_pid) or (not target_pid and target.lower() in (p.info['name'] or '').lower()):
+                        if p.info['name'] in protected:
+                            continue
+                        p.terminate()
+                        killed.append(p.info)
+                except Exception:
+                    continue
+            print(json.dumps({"success": True, "terminated": killed}))
+            return
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+
+def cmd_get_clipboard():
+    try:
+        import tkinter as tk
+        r = tk.Tk()
+        r.withdraw()
+        content = r.clipboard_get()
+        r.destroy()
+        print(json.dumps({"success": True, "content": content}))
+    except Exception as e:
+        print(json.dumps({"success": False, "content": "", "error": str(e)}))
+
+def cmd_set_clipboard(text):
+    try:
+        import tkinter as tk
+        r = tk.Tk()
+        r.withdraw()
+        r.clipboard_clear()
+        r.clipboard_append(text)
+        r.update()
+        r.destroy()
+        print(json.dumps({"success": True, "text": text}))
+    except Exception as e:
+        print(json.dumps({"success": False, "error": str(e)}))
+
+def dispatch_command(cmd, args):
+    import io
+    from contextlib import redirect_stdout, redirect_stderr
+    buf = io.StringIO()
+    with redirect_stdout(buf), redirect_stderr(buf):
+        try:
+            if cmd == "dump":
+                target = args[0] if len(args) > 0 else ""
+                cmd_dump(target)
+            elif cmd == "list_windows":
+                cmd_list_windows()
+            elif cmd == "focused":
+                cmd_focused()
+            elif cmd == "focus_window":
+                title = args[0] if len(args) > 0 else ""
+                cmd_focus_window(title)
+            elif cmd == "window_control":
+                title = args[0] if len(args) > 0 else ""
+                action = args[1] if len(args) > 1 else "close"
+                cmd_window_control(title, action)
+            elif cmd == "system_info":
+                cmd_system_info()
+            elif cmd == "manage_process":
+                action = args[0] if len(args) > 0 else "list"
+                target = args[1] if len(args) > 1 else ""
+                cmd_manage_process(action, target)
+            elif cmd == "get_clipboard":
+                cmd_get_clipboard()
+            elif cmd == "set_clipboard":
+                text = args[0] if len(args) > 0 else ""
+                cmd_set_clipboard(text)
+            elif cmd == "extents":
+                target = args[0] if len(args) > 0 else ""
+                cmd_extents(target)
+            elif cmd == "interact":
+                target = args[0] if len(args) > 0 else ""
+                act = args[1] if len(args) > 1 else "click"
+                cmd_interact(target, act)
+            elif cmd == "set_text":
+                target = args[0] if len(args) > 0 else ""
+                val = args[1] if len(args) > 1 else ""
+                auto_save = str(args[2]).lower() in ["true", "1", "yes"] if len(args) > 2 else False
+                cmd_set_text(target, val, auto_save)
+            elif cmd == "mouse_pos":
+                cmd_mouse_pos()
+            elif cmd == "click":
+                x = args[0]
+                y = args[1]
+                btn = args[2] if len(args) > 2 else "left"
+                clk = args[3] if len(args) > 3 else 1
+                cmd_click_coords(x, y, btn, clk)
+            elif cmd == "type":
+                k = args[0] if len(args) > 0 else ""
+                is_sc = str(args[1]).lower() in ["true", "1", "yes"] if len(args) > 1 else False
+                cmd_type_keys(k, is_sc)
+            elif cmd == "scroll":
+                amt = args[0] if len(args) > 0 else 5
+                dirn = args[1] if len(args) > 1 else "down"
+                cmd_mouse_scroll(amt, dirn)
+            elif cmd == "scratchpad":
+                status = args[0] if len(args) > 0 else "Active"
+                notes = args[1] if len(args) > 1 else ""
+                cmd_update_scratchpad(status, notes)
+            else:
+                print(json.dumps({"error": f"Unknown command: {cmd}"}))
+        except Exception as ex:
+            print(json.dumps({"error": str(ex)}))
+    return buf.getvalue().strip()
+
+def run_daemon():
+    import socket
+    sock_path = "/tmp/swades_cua.sock"
+    if os.path.exists(sock_path):
+        try:
+            os.unlink(sock_path)
+        except Exception:
+            pass
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(sock_path)
+    os.chmod(sock_path, 0o777)
+    server.listen(16)
+    print(f"🚀 Swades CUA Persistent Daemon active on {sock_path}")
+    sys.stdout.flush()
+
+    while True:
+        try:
+            conn, _ = server.accept()
+            data = conn.recv(65536).decode("utf-8")
+            if not data:
+                conn.close()
+                continue
+            req = json.loads(data)
+            cmd = req.get("cmd", "")
+            args = req.get("args", [])
+            out = dispatch_command(cmd, args)
+            conn.sendall(out.encode("utf-8"))
+            conn.close()
+        except Exception as e:
+            try:
+                conn.sendall(json.dumps({"error": str(e)}).encode("utf-8"))
+                conn.close()
+            except Exception:
+                pass
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print("Usage: semantic_desktop.py [dump | list_windows | focused | extents <target> | interact <target> [action] | set_text <target> <text> | mouse_pos | click <x> <y> [button] [clicks] | type <keys> [is_shortcut] | scroll <clicks> [dir] | scratchpad <status> <notes>]")
+        print("Usage: semantic_desktop.py [--daemon | <command> [args...]]")
         sys.exit(1)
 
     cmd = sys.argv[1]
-    if cmd == "dump":
-        cmd_dump()
-    elif cmd == "list_windows":
-        cmd_list_windows()
-    elif cmd == "focused":
-        cmd_focused()
-    elif cmd == "extents":
-        target = sys.argv[2] if len(sys.argv) > 2 else ""
-        cmd_extents(target)
-    elif cmd == "interact":
-        target = sys.argv[2] if len(sys.argv) > 2 else ""
-        act = sys.argv[3] if len(sys.argv) > 3 else "click"
-        cmd_interact(target, act)
-    elif cmd == "set_text":
-        target = sys.argv[2] if len(sys.argv) > 2 else ""
-        val = sys.argv[3] if len(sys.argv) > 3 else ""
-        cmd_set_text(target, val)
-    elif cmd == "mouse_pos":
-        cmd_mouse_pos()
-    elif cmd == "click":
-        x = sys.argv[2]
-        y = sys.argv[3]
-        btn = sys.argv[4] if len(sys.argv) > 4 else "left"
-        clk = sys.argv[5] if len(sys.argv) > 5 else 1
-        cmd_click_coords(x, y, btn, clk)
-    elif cmd == "type":
-        k = sys.argv[2] if len(sys.argv) > 2 else ""
-        is_sc = sys.argv[3].lower() in ["true", "1", "yes"] if len(sys.argv) > 3 else False
-        cmd_type_keys(k, is_sc)
-    elif cmd == "scroll":
-        amt = sys.argv[2] if len(sys.argv) > 2 else 5
-        dirn = sys.argv[3] if len(sys.argv) > 3 else "down"
-        cmd_mouse_scroll(amt, dirn)
-    elif cmd == "scratchpad":
-        status = sys.argv[2] if len(sys.argv) > 2 else "Active"
-        notes = sys.argv[3] if len(sys.argv) > 3 else ""
-        cmd_update_scratchpad(status, notes)
+    if cmd in ["--daemon", "daemon"]:
+        run_daemon()
     else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+        out = dispatch_command(cmd, sys.argv[2:])
+        print(out)
+

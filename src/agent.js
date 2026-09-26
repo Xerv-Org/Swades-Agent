@@ -3,13 +3,13 @@
 
 import chalk from "chalk";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import { exec } from "node:child_process";
 import { callLLM, MODEL } from "./llm.js";
 import { executeTool, activeDeadline, detectProjectStack, checkpointStore } from "./tools.js";
-import { SYSTEM_PROMPT, TOOL_SCHEMAS } from "./prompts.js";
+import { SYSTEM_PROMPT, CUA_SYSTEM_PROMPT, TOOL_SCHEMAS, getToolSchemas } from "./prompts.js";
 import { getMemoryContext, recordSession } from "./memory.js";
 import { getSwadesCacheDir } from "./cleanup.js";
 import { recordAgentPerformance } from "./memory.js";
@@ -22,6 +22,22 @@ function shell(cmd, cwd) {
       resolve((stdout || "").trim());
     });
   });
+}
+
+// Live HUD logger for real-time Web HUD overlay (/tmp/swades_chat_logs.json)
+export function appendChatLog(sender, text) {
+  try {
+    const logFile = "/tmp/swades_chat_logs.json";
+    let logs = [];
+    if (existsSync(logFile)) {
+      try { logs = JSON.parse(readFileSync(logFile, "utf-8")); } catch (_) { logs = []; }
+    }
+    const d = new Date();
+    const timeStr = d.toTimeString().split(" ")[0];
+    logs.push({ sender, text: String(text).slice(0, 1500), time: timeStr });
+    if (logs.length > 300) logs = logs.slice(-300);
+    writeFileSync(logFile, JSON.stringify(logs, null, 2));
+  } catch (_) {}
 }
 
 // ============================================================
@@ -107,7 +123,8 @@ class LoopDetector {
     const progressTools = [
       "write_file", "patch_file", "run_command",
       "mouse_click", "type_keys", "mouse_scroll", "set_field_value", "interact_element",
-      "browser_launch", "open_browser_url", "browser_eval_js"
+      "browser_launch", "open_browser_url", "browser_eval_js",
+      "focus_window", "window_control", "manage_process"
     ];
     const madeProgress = toolNames.some((t) => progressTools.includes(t));
 
@@ -176,6 +193,7 @@ export async function prepareImageUrl(imagePathOrUrl) {
 export async function runAgent(task, maxSteps, existingMessages, image, role = null) {
   const max = maxSteps || parseInt(process.env.MAX_STEPS) || Infinity;
   let messages = existingMessages;
+  const isCUA = process.env.SWADES_CUA_MODE === "true";
 
   // NOTE: The old orchestrator gate was here (auto-routing to runOrchestrated).
   // It has been removed. The agent now starts directly in the ReAct loop
@@ -190,7 +208,7 @@ export async function runAgent(task, maxSteps, existingMessages, image, role = n
     let indexContext = "";
     const cacheDir = getSwadesCacheDir(resolvedWorkdir);
     const indexFile = resolve(cacheDir, "agent_index.json");
-    if (existsSync(indexFile)) {
+    if (existsSync(indexFile) && process.env.SWADES_CUA_MODE !== "true") {
       try {
         const index = JSON.parse(await readFile(indexFile, "utf-8"));
         const files = Object.keys(index.files);
@@ -232,6 +250,64 @@ STACK RULES:
 
     const memoryContext = await getMemoryContext();
 
+    // Collect live host environment & desktop telemetry
+    let environmentContext = "";
+    try {
+      const osInfo = `${process.platform} (${process.arch}), node ${process.version}`;
+      const display = process.env.DISPLAY || ":0";
+      const wayland = process.env.WAYLAND_DISPLAY || "none";
+      const xdgSession = process.env.XDG_SESSION_TYPE || "wayland/x11";
+      const desktopEnv = process.env.XDG_CURRENT_DESKTOP || "GNOME";
+
+      let windowsSummary = "No active desktop windows detected";
+      let focusedSummary = "None";
+      let openUserTabs = [];
+      try {
+        const { executeCuaTool } = await import("./cua_tools.js");
+        const rawWindows = await executeCuaTool("list_open_windows");
+        const parsed = JSON.parse(rawWindows);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          windowsSummary = parsed.map(w => {
+            const title = w.title || w.name || "Untitled";
+            const pid = w.pid ? `PID:${w.pid}` : "";
+            const rss = w.rss_kb ? `${Math.round(w.rss_kb / 1024)}MB` : "";
+            const geo = w.geometry ? `[${w.geometry.width}x${w.geometry.height} at (${w.geometry.x},${w.geometry.y})]` : "";
+            const tabs = (w.open_tabs_or_windows && w.open_tabs_or_windows.length > 1) 
+              ? ` | Open Tabs: [${w.open_tabs_or_windows.map(t => `"${t}"`).join(", ")}]` 
+              : "";
+            if (Array.isArray(w.open_tabs_or_windows)) {
+              for (const t of w.open_tabs_or_windows) {
+                if (t && !t.includes("swades_intro") && !openUserTabs.includes(t)) {
+                  openUserTabs.push(t);
+                }
+              }
+            }
+            return `- "${title}" (${w.process_name || w.role || "window"}, ${[pid, rss, geo].filter(Boolean).join(", ")})${tabs}`;
+          }).join("\n");
+        }
+
+        const rawFocused = await executeCuaTool("get_focused_element");
+        const parsedF = JSON.parse(rawFocused);
+        if (parsedF && parsedF.focused) {
+          focusedSummary = `"${parsedF.name || parsedF.role}" (${parsedF.role}, states: [${(parsedF.states || []).join(", ")}])`;
+        }
+      } catch (_) {}
+
+      const userDocsWarning = openUserTabs.length > 0 
+        ? `\n- ⚠️ PROTECTED USER DOCUMENTS (DO NOT OVERWRITE OR TOUCH): [${openUserTabs.map(f => `"${f}"`).join(", ")}]`
+        : "";
+
+      environmentContext = `\n\n## LIVE HOST ENVIRONMENT & DESKTOP TELEMETRY
+- Host OS: ${osInfo}
+- Desktop Environment: ${desktopEnv} (Session: ${xdgSession}, DISPLAY: ${display}, WAYLAND: ${wayland})
+- Native On-Screen Desktop HUD Overlay: Active and floating at bottom-right (Displaying live AI thoughts & actions)
+- Currently Focused Element: ${focusedSummary}
+- Currently Open Desktop Windows & Tabs:
+${windowsSummary}${userDocsWarning}
+- Document Safety Mandate: NEVER type into or overwrite an existing open tab/document in text editors. If a text editor is already open with user documents, target your dedicated scratch file (/tmp/swades_intro.txt) or press 'ctrl+n' to create a clean fresh tab!
+- Speed Mandate: Directly execute actions. Complete in 2-3 steps max.`;
+    } catch (_) {}
+
     const workspaceContext = `\n\n## WORKSPACE\nActive directory: ${resolvedWorkdir}\nAll tool operations run relative to this folder.`;
 
     let userContent = task;
@@ -248,7 +324,8 @@ STACK RULES:
       }
     }
 
-    let systemContent = SYSTEM_PROMPT + workspaceContext + indexContext + stackContext + memoryContext;
+    const basePrompt = isCUA ? CUA_SYSTEM_PROMPT : SYSTEM_PROMPT;
+    let systemContent = basePrompt + workspaceContext + environmentContext + (isCUA ? "" : indexContext + stackContext + memoryContext);
 
     // Inject role-specific context if this is a role-assigned agent
     if (role) {
@@ -340,6 +417,9 @@ STACK RULES:
       if (!isNaN(seconds) && seconds >= 30 && seconds <= 600) {
         estimatedDurationSeconds = seconds;
       }
+      if (process.env.SWADES_CUA_MODE === "true" && estimatedDurationSeconds < 480) {
+        estimatedDurationSeconds = 480;
+      }
     } catch (err) {
       console.log(chalk.dim(`   (AI time estimation failed: ${err.message}. Defaulting to 180s.)`));
     }
@@ -349,16 +429,18 @@ STACK RULES:
     activeDeadline.startTime = Date.now();
   } else {
     activeDeadline.startTime = Date.now();
-    activeDeadline.estimatedSeconds = activeDeadline.estimatedSeconds || 180;
+    activeDeadline.estimatedSeconds = activeDeadline.estimatedSeconds || (process.env.SWADES_CUA_MODE === "true" ? 480 : 180);
   }
 
   console.log(chalk.cyan.bold("\n🤖 Agent started"));
   console.log(chalk.dim(`   Model: ${MODEL} | Steps: ${max === Infinity ? "∞" : max} | Task: ${task || "continuing"}\n`));
+  appendChatLog("User", task || "Continuing task");
 
-  let graceStepsLeft = 3;
+  let graceStepsLeft = process.env.SWADES_CUA_MODE === "true" ? 10 : 3;
 
   for (let step = 1; step <= max; step++) {
     console.log(chalk.yellow(`⚡ Step ${step}${max === Infinity ? "" : `/${max}`}`));
+    appendChatLog("AI Step", `⚡ Step ${step}`);
 
     const elapsed = Math.round((Date.now() - activeDeadline.startTime) / 1000);
     const remaining = activeDeadline.estimatedSeconds - elapsed;
@@ -430,19 +512,52 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
 
     try {
       const messagesToSend = pruneContext(messages);
-      response = await callLLM(messagesToSend, TOOL_SCHEMAS, (chunk) => {
-        if (chunk.type === "reasoning" && chunk.text) {
-          if (!reasoningHeader) { process.stdout.write(chalk.gray("\n🤔 Thinking: ")); reasoningHeader = true; }
-          process.stdout.write(chalk.gray(chunk.text));
-        } else if (chunk.type === "content") {
-          if (!header) { process.stdout.write(chalk.blue(reasoningHeader ? "\n💭 " : "💭 ")); header = true; }
-          process.stdout.write(chalk.blue(chunk.text));
-        } else if (chunk.type === "tool_name" && chunk.name) {
-          process.stdout.write(chalk.magenta(`\n   🔧 ${chunk.name}`));
-        } else if (chunk.type === "tool_args" && chunk.args) {
-          process.stdout.write(chalk.gray(chunk.args));
+      const activeToolSchemas = isCUA
+        ? (await import("./cua_tools.js")).CUA_MINIMAL_TOOL_SCHEMAS
+        : getToolSchemas(false);
+
+      // ---- Timeout Loop for Step LLM Call (strict 10s ceiling) ----
+      const STEP_TIMEOUT_MS = parseInt(process.env.STEP_TIMEOUT_MS) || 10000;
+      let stepAttempts = 0;
+      const MAX_STEP_ATTEMPTS = 3;
+
+      while (stepAttempts < MAX_STEP_ATTEMPTS) {
+        stepAttempts++;
+        try {
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`LLM step timed out after ${STEP_TIMEOUT_MS / 1000}s`)), STEP_TIMEOUT_MS);
+          });
+
+          response = await Promise.race([
+            callLLM(messagesToSend, activeToolSchemas, (chunk) => {
+              if (chunk.type === "reasoning" && chunk.text) {
+                if (!reasoningHeader) { process.stdout.write(chalk.gray("\n🤔 Thinking: ")); reasoningHeader = true; }
+                process.stdout.write(chalk.gray(chunk.text));
+              } else if (chunk.type === "content") {
+                if (!header) { process.stdout.write(chalk.blue(reasoningHeader ? "\n💭 " : "💭 ")); header = true; }
+                process.stdout.write(chalk.blue(chunk.text));
+              } else if (chunk.type === "tool_name" && chunk.name) {
+                process.stdout.write(chalk.magenta(`\n   🔧 ${chunk.name}`));
+              } else if (chunk.type === "tool_args" && chunk.args) {
+                process.stdout.write(chalk.gray(chunk.args));
+              }
+            }),
+            timeoutPromise
+          ]);
+          break;
+        } catch (stepErr) {
+          const isTimeout = (stepErr.message || "").toLowerCase().includes("timed out") ||
+                            (stepErr.message || "").toLowerCase().includes("timeout") ||
+                            (stepErr.message || "").toLowerCase().includes("aborterror");
+          if (isTimeout && stepAttempts < MAX_STEP_ATTEMPTS) {
+            console.log(chalk.yellow(`\n   ⏱️ [TIMEOUT LOOP] Step timed out (${stepAttempts}/${MAX_STEP_ATTEMPTS}). Retrying...`));
+            appendChatLog("System", `Step timed out (${stepAttempts}/${MAX_STEP_ATTEMPTS}), retrying...`);
+            await new Promise(r => setTimeout(r, 1500));
+            continue;
+          }
+          throw stepErr;
         }
-      });
+      }
       console.log();
     } catch (err) {
       const status = err.status || err.statusCode || err.originalError?.status || err.originalError?.error?.status_code || 0;
@@ -457,7 +572,20 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
         console.log(chalk.yellow(`\n   ⚠️ [TOOL RECOVERY] Model attempted to call an unlisted tool. Self-healing...`));
         messages.push({
           role: "user",
-          content: "⚠️ Tool Error: You attempted to call an invalid or unlisted tool. You must STRICTLY use only the tools declared in your tool schemas: read_file, write_file, patch_file, run_command, git_checkpoint, etc. Please call the appropriate valid tool now."
+          content: "⚠️ Tool Error: You attempted to call an invalid or unlisted tool. You must STRICTLY use only the tools declared in your tool schemas (read_file, write_file, patch_file, run_command, list_open_windows, set_field_value, type_keys, mouse_click, etc.). Please call the appropriate valid tool now."
+        });
+        continue;
+      }
+
+      // ---- Empty model output (Groq returns neither text nor tool_calls) — retryable ----
+      const isEmptyOutput = msg.includes("model output must contain either output text or tool calls") ||
+                            msg.includes("empty") && msg.includes("tool calls") ||
+                            msg.includes("output text or tool calls");
+      if (isEmptyOutput) {
+        console.log(chalk.yellow(`\n   ⚠️ [EMPTY OUTPUT] Model returned empty response. Nudging model to retry...`));
+        messages.push({
+          role: "user",
+          content: "Please continue. You must either call a tool or provide a text response. Do not return an empty response."
         });
         continue;
       }
@@ -467,11 +595,11 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       //   401 = invalid API key
       //   400 = malformed request (bad message structure, unsupported field)
       //   413 = payload too large (permanent context overflow)
-      const isFatal = !isRateLimit && (
+      const isFatal = !isRateLimit && !isEmptyOutput && (
         status === 404 || msg.includes("does not exist") ||
         status === 401 || msg.includes("invalid api key") ||
         status === 413 ||
-        (status === 400 && !msg.includes("rate") && !msg.includes("context_length"))
+        (status === 400 && !msg.includes("rate") && !msg.includes("context_length") && !msg.includes("output text"))
       );
 
       if (isFatal) {
@@ -495,6 +623,8 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
     }
 
     messages.push(response);
+    if (response.reasoning) appendChatLog("AI Thought", response.reasoning);
+    if (response.content) appendChatLog("AI Message", response.content);
 
     // Check if assistant provided plain-text Search/Replace blocks in response content
     const searchReplaceRegex = /(?:^|\n)(?:###?\s*(?:File:\s*)?|File:\s*)?`?([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)`?\s*\n<{5,9}\s*SEARCH\r?\n([\s\S]*?)(?:^|\n)={5,9}\r?\n([\s\S]*?)(?:^|\n)>{5,9}\s*REPLACE/gm;
@@ -527,7 +657,9 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
           } catch (_) {}
         }
         console.log(chalk.magenta(`   → patch_file (Search/Replace): ${block.path}`));
+        appendChatLog("AI Action", `🔧 Tool: patch_file for ${block.path}`);
         const patchResult = await executeTool("patch_file", block);
+        appendChatLog("Observation", String(patchResult).slice(0, 500));
         console.log(chalk.gray(`   ${patchResult.split("\n")[0]}`));
         messages.push({
           role: "user",
@@ -540,6 +672,7 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
     // No tool calls and no diff blocks → final answer
     if (!response.tool_calls?.length) {
       const answer = response.content || "(no response)";
+      appendChatLog("AI Done", answer);
       console.log(chalk.green("\n💬 Answer:\n"));
       console.log(answer);
       console.log(chalk.green.bold("\n✅ Done\n"));
@@ -562,6 +695,7 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       toolsUsed.add(name);
       stepToolNames.push(name);
       console.log(chalk.magenta(`   → ${name}`));
+      appendChatLog("AI Action", `🔧 Tool: ${name}`);
 
       // ---- Git State Checkpoint (before any mutating tool) ----
       if (MUTATING_TOOLS.has(name) && lastCheckpointStep !== step) {
@@ -585,16 +719,35 @@ ${remaining <= 0 ? `- GRACE WARNING: You will be forcibly terminated in ${graceS
       const loopWarning = loopDetector.recordCall(name, args, step);
       if (loopWarning) {
         console.log(chalk.red.bold(`   ${loopWarning}`));
+        appendChatLog("Observation", loopWarning);
         // Return the warning as the tool result instead of executing
         messages.push({ role: "tool", tool_call_id: toolCall.id, content: loopWarning });
         continue;
       }
 
-      const result = await executeTool(name, args);
+      // Tool execution with timeout protection (strict 10s timeout)
+      const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS) || 10000;
+      let result;
+      try {
+        result = await Promise.race([
+          executeTool(name, args),
+          new Promise((_, reject) => setTimeout(() => reject(new Error(`Tool '${name}' timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS))
+        ]);
+      } catch (toolErr) {
+        result = `Error: ${toolErr.message}`;
+      }
+      appendChatLog("Observation", String(result).slice(0, 500));
       const preview = result.length > 200 ? result.slice(0, 200) + chalk.dim(`... (${result.length} chars)`) : result;
       console.log(chalk.gray(`   ${preview.split("\n").join("\n   ")}\n`));
 
-      messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
+      // Safeguard: Truncate oversized tool observations before pushing to LLM messages
+      // to strictly prevent 413 (Request too large / ITPM limit exceeded)
+      const maxToolMsgLen = process.env.SWADES_CUA_MODE === "true" ? 2500 : 4000;
+      const safeToolContent = (typeof result === "string" && result.length > maxToolMsgLen)
+        ? result.slice(0, maxToolMsgLen - 500) + `\n\n... [output truncated from ${result.length} chars to stay within API token limits] ...\n\n` + result.slice(-300)
+        : result;
+
+      messages.push({ role: "tool", tool_call_id: toolCall.id, content: safeToolContent });
 
       // ---- Rewind signal from rewind_to_checkpoint tool ----
       if (name === "rewind_to_checkpoint" && process.env._SWADES_REWIND_STEP) {

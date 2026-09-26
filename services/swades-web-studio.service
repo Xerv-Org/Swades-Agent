@@ -1,0 +1,14 @@
+[Unit]
+Description=Swades Web Copilot Studio & Live Desktop Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Swades-Agent
+ExecStart=/usr/bin/python3 /root/Swades-Agent/src/web_copilot_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

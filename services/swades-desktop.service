@@ -1,0 +1,20 @@
+[Unit]
+Description=Swades Virtual Desktop & noVNC Stream Service
+After=network.target
+
+[Service]
+Type=forking
+User=root
+WorkingDirectory=/root
+Environment=DISPLAY=:99
+Environment=XDG_CURRENT_DESKTOP=XFCE
+Environment=XDG_SESSION_TYPE=x11
+Environment=NO_AT_BRIDGE=0
+Environment=GTK_MODULES=gail:atk-bridge
+Environment=GNOME_ACCESSIBILITY=1
+ExecStart=/root/start_virtual_desktop.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

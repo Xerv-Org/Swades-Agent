@@ -1265,7 +1265,10 @@ def worker_thread():
                         json.dump(queue, f, indent=2)
 
                     try:
-                        stream_groq_react(item)
+                        task_text = item.get("text", "")
+                        proj_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                        proc = subprocess.Popen(["node", "src/index.js", "cua", task_text], cwd=proj_root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                        proc.communicate()
                     except Exception as loop_err:
                         append_log("Crash Log", f"❌ Fatal Loop Error: {loop_err}\n{traceback.format_exc()}")
 
@@ -1492,8 +1495,9 @@ HTML_PAGE = """<!DOCTYPE html>
 </head>
 <body>
 
-<div id="desktop-container">
-  <iframe id="desktop-frame" src="http://129.212.188.93:6080/vnc.html?autoconnect=true&resize=scale&view_only=true"></iframe>
+<div id="desktop-container" style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100%; opacity:0.12; font-family:'JetBrains Mono',monospace;">
+  <h1 style="font-size:42px; margin-bottom:12px; letter-spacing:1px;">⚡ SWADES AGENT CUA</h1>
+  <p style="font-size:16px;">Omni-Inspector • 28 Universal Tools • Live ReAct Telemetry</p>
 </div>
 
 <div id="hud-overlay">

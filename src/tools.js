@@ -62,7 +62,11 @@ function getWorkdir() {
 
 function resolvePath(p) {
   if (!p) return getWorkdir();
-  return resolve(getWorkdir(), p);
+  const direct = resolve(getWorkdir(), p);
+  if (!existsSync(direct) && existsSync(resolve("/tmp", p))) {
+    return resolve("/tmp", p);
+  }
+  return direct;
 }
 
 function truncate(str, maxLen) {
@@ -1050,7 +1054,7 @@ async function runCommandTool({ command, cwd }) {
     activeBgPid = null;
   });
 
-  const timeoutMs = 30000;
+  const timeoutMs = 10000;
   
   return new Promise((resolvePromise) => {
     const checkInterval = setInterval(async () => {
@@ -1072,14 +1076,15 @@ async function runCommandTool({ command, cwd }) {
 
     const timer = setTimeout(async () => {
       clearInterval(checkInterval);
+      if (child.pid) {
+        try { process.kill(-child.pid, "SIGTERM"); } catch (_) { try { child.kill("SIGTERM"); } catch (_) {} }
+      }
       try {
         const logContent = await readFile(activeBgLogPath, "utf-8");
-        resolvePromise(`⚠️ [TIMEOUT] The command is taking longer than 30s. It has been detached and is running in the background.
-You can monitor the output using the 'peek_terminal' tool.
-Recent output:
+        resolvePromise(`⚠️ [10s TIMEOUT TERMINATED] Command exceeded 10s limit and was terminated. Output before termination:
 ${truncate(logContent || "(no output)")}`);
       } catch (e) {
-        resolvePromise(`⚠️ [TIMEOUT] The command is taking longer than 30s. It has been detached. Failed to read current logs: ${e.message}`);
+        resolvePromise(`⚠️ [10s TIMEOUT TERMINATED] Command exceeded 10s limit and was terminated.`);
       }
     }, timeoutMs);
   });
@@ -1562,6 +1567,12 @@ const TOOL_REGISTRY = {
   browser_eval_js: (args) => executeCuaTool("browser_eval_js", args),
   browser_query_dom: (args) => executeCuaTool("browser_query_dom", args),
   inspect_desktop_state: (args) => executeCuaTool("inspect_desktop_state", args),
+  focus_window: (args) => executeCuaTool("focus_window", args),
+  window_control: (args) => executeCuaTool("window_control", args),
+  system_info: (args) => executeCuaTool("system_info", args),
+  manage_process: (args) => executeCuaTool("manage_process", args),
+  get_clipboard: (args) => executeCuaTool("get_clipboard", args),
+  set_clipboard: (args) => executeCuaTool("set_clipboard", args),
   run_os_command: runCommandTool,
 };
 

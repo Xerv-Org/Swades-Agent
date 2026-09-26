@@ -1,23 +1,54 @@
 // cua_tools.js — Low-Level Structural Perception & Execution Tools for Swades ReAct CUA
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { resolve } from "node:path";
+import net from "node:net";
+import { existsSync } from "node:fs";
 
 const SCRIPT_DIR = resolve(process.cwd(), "src");
 const SEMANTIC_DESKTOP_PY = resolve(SCRIPT_DIR, "semantic_desktop.py");
 const BROWSER_CDP_PY = resolve(SCRIPT_DIR, "browser_cdp.py");
+const DAEMON_SOCK = "/tmp/swades_cua.sock";
+
+let daemonProcess = null;
+
+function ensureDaemonRunning() {
+  if (!existsSync(DAEMON_SOCK) && !daemonProcess) {
+    daemonProcess = spawn("python3", [SEMANTIC_DESKTOP_PY, "--daemon"], {
+      env: {
+        ...process.env,
+        DISPLAY: process.env.DISPLAY || (existsSync("/tmp/.X11-unix/X99") ? ":99" : ":0"),
+        PYTHONPATH: "/usr/lib/python3/dist-packages:" + (process.env.PYTHONPATH || "")
+      },
+      detached: true,
+      stdio: "ignore"
+    });
+    daemonProcess.unref();
+  }
+}
 
 function runCommand(cmd, envExtra = {}) {
+  let cleanCmd = cmd;
+  if (cleanCmd.includes("chromium") && !cleanCmd.includes("--no-sandbox")) {
+    cleanCmd = cleanCmd.replace(/chromium-browser|chromium/g, "$& --no-sandbox");
+  }
   return new Promise((resolve) => {
     exec(cmd, {
       env: {
         ...process.env,
-        DISPLAY: process.env.DISPLAY || ":0",
+        DISPLAY: process.env.DISPLAY || (existsSync("/tmp/.X11-unix/X99") ? ":99" : ":0"),
+        PYTHONPATH: "/usr/lib/python3/dist-packages:" + (process.env.PYTHONPATH || ""),
         ...envExtra
       },
+      timeout: 10000,
+      killSignal: "SIGKILL",
       maxBuffer: 10 * 1024 * 1024
     }, (err, stdout, stderr) => {
       if (err) {
-        resolve(stdout ? `${stdout}\nError: ${stderr || err.message}` : `Error: ${stderr || err.message}`);
+        if (err.killed || err.signal === "SIGKILL") {
+          resolve("⚠️ [10s TIMEOUT TERMINATED] Operation exceeded 10s limit and was terminated.");
+        } else {
+          resolve(stdout ? `${stdout}\nError: ${stderr || err.message}` : `Error: ${stderr || err.message}`);
+        }
       } else {
         resolve(stdout.trim() || stderr.trim() || "OK");
       }
@@ -25,8 +56,45 @@ function runCommand(cmd, envExtra = {}) {
   });
 }
 
-function runSemantic(args) {
-  return runCommand(`python3 "${SEMANTIC_DESKTOP_PY}" ${args}`);
+function sendToDaemon(cmd, args = []) {
+  ensureDaemonRunning();
+  return new Promise((resolvePromise) => {
+    const client = net.createConnection({ path: DAEMON_SOCK }, () => {
+      client.write(JSON.stringify({ cmd, args }));
+    });
+
+    let data = "";
+    client.on("data", (chunk) => {
+      data += chunk.toString();
+    });
+
+    client.on("end", () => {
+      resolvePromise(data.trim() || "OK");
+    });
+
+    client.on("error", () => {
+      // Fallback to direct subprocess if socket fails
+      const argsStr = args.map(a => `"${String(a).replace(/"/g, '\\"')}"`).join(" ");
+      resolvePromise(runCommand(`python3 "${SEMANTIC_DESKTOP_PY}" ${cmd} ${argsStr}`));
+    });
+
+    client.setTimeout(8000, () => {
+      client.destroy();
+      const argsStr = args.map(a => `"${String(a).replace(/"/g, '\\"')}"`).join(" ");
+      resolvePromise(runCommand(`python3 "${SEMANTIC_DESKTOP_PY}" ${cmd} ${argsStr}`));
+    });
+  });
+}
+
+function runSemantic(cmdOrArgs) {
+  if (typeof cmdOrArgs === "string" && !cmdOrArgs.includes(" ")) {
+    return sendToDaemon(cmdOrArgs, []);
+  }
+  // If passed as command string like 'focus_window "Firefox"'
+  const parts = cmdOrArgs.match(/(?:[^\s"]+|"[^"]*")+/g) || [cmdOrArgs];
+  const cmd = parts[0];
+  const args = parts.slice(1).map(p => p.replace(/^"|"$/g, ""));
+  return sendToDaemon(cmd, args);
 }
 
 function runBrowserCdp(args) {
@@ -38,10 +106,12 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "read_screen_tree",
-      description: "Read the full desktop accessibility widget tree via Linux AT-SPI2 D-Bus IPC (dump active windows, UI widgets, buttons, editable fields, text contents, states, and available actions). Zero-screenshot structural perception.",
+      description: "Read the desktop accessibility widget tree via Linux AT-SPI2 D-Bus IPC (buttons, editable fields, text contents, states, and available actions). Defaults to focused window or specify target app name (e.g. 'Text Editor').",
       parameters: {
         type: "object",
-        properties: {},
+        properties: {
+          target: { type: "string", description: "Optional window title or application name to inspect (e.g. 'Text Editor')" }
+        },
         required: []
       }
     }
@@ -88,12 +158,13 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "set_field_value",
-      description: "Set text directly inside any input field, text editor, or entry box by element name or role without moving the mouse pointer.",
+      description: "Set text directly inside any input field, text editor, or entry box by element name or role without moving the mouse pointer. Use save:true to atomically save after injection (eliminates a separate ctrl+s turn).",
       parameters: {
         type: "object",
         properties: {
           target: { type: "string", description: "Name or role of the target text/entry element" },
-          text: { type: "string", description: "Text content to set" }
+          text: { type: "string", description: "Text content to set" },
+          save: { type: "boolean", description: "If true, automatically saves the document after injecting text (equivalent to ctrl+s). Default false." }
         },
         required: ["target", "text"]
       }
@@ -118,7 +189,6 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "open_browser_url",
-      description: "Open any URL in the user's default system browser (Firefox, Chrome, Brave, Edge, etc.) or a specified browser executable. Works universally on any existing browser without requiring debug flags.",
       parameters: {
         type: "object",
         properties: {
@@ -274,13 +344,157 @@ export const CUA_TOOL_SCHEMAS = [
         required: ["command"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "focus_window",
+      description: "Bring an application window to focus and foreground by window title or application name substring.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Window title or application name substring" }
+        },
+        required: ["title"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "window_control",
+      description: "Perform window operations (close, maximize, minimize) on a window by title substring.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Window title or application name substring" },
+          action: { type: "string", enum: ["close", "maximize", "minimize"], description: "Action to perform" }
+        },
+        required: ["title", "action"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "system_info",
+      description: "Retrieve comprehensive host hardware and OS telemetry: CPU cores, load averages, RAM usage, disk usage, and top active processes.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "manage_process",
+      description: "Inspect running processes, search by name or cmdline, or safely terminate a PID/process.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["list", "search", "kill"], description: "Action to perform" },
+          target: { type: "string", description: "Process name or PID (required for search and kill)" }
+        },
+        required: ["action"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_clipboard",
+      description: "Read the current text content from the desktop system clipboard.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "set_clipboard",
+      description: "Set text content directly into the desktop system clipboard.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Text content to copy to clipboard" }
+        },
+        required: ["text"]
+      }
+    }
   }
 ];
+
+// ── Minimal CUA schema ── Essential tools for AT-SPI-native OS navigation.
+// Model uses read_screen_tree to see full app widget hierarchy (like a DOM for the whole OS),
+// then set_field_value to inject text by element name/role, interact_element to click/activate.
+// NO mouse coordinates needed — pure accessibility tree navigation.
+export const CUA_MINIMAL_TOOL_SCHEMAS = [
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "read_screen_tree"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "set_field_value"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "interact_element"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "get_element_coordinates"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "mouse_click"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "mouse_scroll"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "type_keys"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "focus_window"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "window_control"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "list_open_windows"),
+  {
+    type: "function",
+    function: {
+      name: "read_file",
+      description: "Read a file's contents to verify it was written correctly.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Absolute or relative path to the file" }
+        },
+        required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_command",
+      description: "Run a shell command to launch apps or perform system operations.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "Shell command to execute" }
+        },
+        required: ["command"]
+      }
+    }
+  }
+];
+
+function tryParse(s) {
+  try { return JSON.parse(s); } catch { return s; }
+}
+
+async function withEnvironmentFeedback(actionPromise) {
+  const actionRaw = await actionPromise;
+  try {
+    const focusedRaw = await runSemantic("focused");
+    return JSON.stringify({
+      action_result: tryParse(actionRaw),
+      current_focused_element: tryParse(focusedRaw)
+    }, null, 2);
+  } catch {
+    return actionRaw;
+  }
+}
 
 export async function executeCuaTool(name, args = {}) {
   switch (name) {
     case "read_screen_tree":
-      return await runSemantic("dump");
+      return await runSemantic(args.target ? `dump "${args.target.replace(/"/g, '\\"')}"` : "dump");
 
     case "list_open_windows":
       return await runSemantic("list_windows");
@@ -292,34 +506,46 @@ export async function executeCuaTool(name, args = {}) {
       return await runSemantic(`extents "${(args.target || "").replace(/"/g, '\\"')}"`);
 
     case "set_field_value":
-      return await runSemantic(`set_text "${(args.target || "").replace(/"/g, '\\"')}" "${(args.text || "").replace(/"/g, '\\"')}"`);
+      return await withEnvironmentFeedback(runSemantic(`set_text "${(args.target || "").replace(/"/g, '\\"')}" "${(args.text || "").replace(/"/g, '\\"')}" ${args.save ? 'true' : 'false'}`));
 
     case "interact_element":
-      return await runSemantic(`interact "${(args.target || "").replace(/"/g, '\\"')}" "${args.action || 'click'}"`);
+      return await withEnvironmentFeedback(runSemantic(`interact "${(args.target || "").replace(/"/g, '\\"')}" "${args.action || 'click'}"`));
 
     case "mouse_click":
-      return await runSemantic(`click ${args.x} ${args.y} "${args.button || 'left'}" ${args.clicks || 1}`);
+      return await withEnvironmentFeedback(runSemantic(`click ${args.x} ${args.y} "${args.button || 'left'}" ${args.clicks || 1}`));
 
     case "mouse_scroll":
-      return await runSemantic(`scroll ${args.amount || 5} "${args.direction || 'down'}"`);
+      return await withEnvironmentFeedback(runSemantic(`scroll ${args.amount || 5} "${args.direction || 'down'}"`));
 
     case "type_keys":
-      return await runSemantic(`type "${(args.keys || "").replace(/"/g, '\\"')}" ${args.is_shortcut ? 'true' : 'false'}`);
+      return await withEnvironmentFeedback(runSemantic(`type "${(args.keys || "").replace(/"/g, '\\"')}" ${args.is_shortcut ? 'true' : 'false'}`));
+
+    case "focus_window":
+      return await withEnvironmentFeedback(runSemantic(`focus_window "${(args.title || "").replace(/"/g, '\\"')}"`));
+
+    case "window_control":
+      return await withEnvironmentFeedback(runSemantic(`window_control "${(args.title || "").replace(/"/g, '\\"')}" "${args.action || 'close'}"`));
+
+    case "system_info":
+      return await runSemantic("system_info");
+
+    case "manage_process":
+      return await runSemantic(`manage_process "${args.action || 'list'}" "${(args.target || "").replace(/"/g, '\\"')}"`);
+
+    case "get_clipboard":
+      return await runSemantic("get_clipboard");
+
+    case "set_clipboard":
+      return await runSemantic(`set_clipboard "${(args.text || "").replace(/"/g, '\\"')}"`);
 
     case "open_browser_url": {
-      let targetUrl = (args.url || "about:blank").trim();
+      let targetUrl = (args.url || "https://google.com").trim();
       if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://") && !targetUrl.startsWith("file://")) {
         targetUrl = `https://${targetUrl}`;
       }
-      const b = args.browser ? args.browser.trim() : null;
-      let cmd;
-      if (b) {
-        cmd = `${b} "${targetUrl.replace(/"/g, '\\"')}" &`;
-      } else {
-        cmd = `xdg-open "${targetUrl.replace(/"/g, '\\"')}" 2>/dev/null || sensible-browser "${targetUrl.replace(/"/g, '\\"')}" 2>/dev/null || open "${targetUrl.replace(/"/g, '\\"')}" 2>/dev/null &`;
-      }
+      const cmd = `chromium-browser --no-sandbox "${targetUrl.replace(/"/g, '\"')}" >/dev/null 2>&1 &`;
       await runCommand(cmd);
-      return `Opened '${targetUrl}' in ${b || "default system browser"}.`;
+      return `Opened '${targetUrl}' in Chromium.`;
     }
 
     case "browser_launch": {
