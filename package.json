@@ -42,7 +42,8 @@
   "dependencies": {
     "chalk": "^5.4.1",
     "dotenv": "^16.4.7",
-    "openai": "^4.86.2"
+    "openai": "^4.86.2",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.9.2",

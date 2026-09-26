@@ -26,4 +26,4 @@ dist/
 build/
 out/
 .idea/
-*.imltmp/
+*.iml

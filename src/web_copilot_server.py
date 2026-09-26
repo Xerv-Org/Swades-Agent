@@ -25,7 +25,7 @@ LOGS_FILE = "/tmp/swades_chat_logs.json"
 current_worker = None
 is_task_running = False
 
-HTML_CONTENT = """<!DOCTYPE html>
+HTML_CONTENT = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
