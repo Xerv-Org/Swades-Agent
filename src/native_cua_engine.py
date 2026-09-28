@@ -52,6 +52,7 @@ def ensure_chrome():
     cmd = [
         chrome_bin,
         "--no-sandbox",
+        "--test-type",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-dev-shm-usage",
@@ -378,6 +379,20 @@ def get_desktop_windows():
                         })
     except Exception:
         pass
+
+    # Fallback to xdotool if wmctrl returned nothing
+    if not windows:
+        try:
+            res = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", ""], stdout=subprocess.PIPE, text=True)
+            for wid in res.stdout.strip().split("\n"):
+                if wid.strip():
+                    name_res = subprocess.run(["xdotool", "getwindowname", wid.strip()], stdout=subprocess.PIPE, text=True)
+                    t = name_res.stdout.strip()
+                    if t and not any(ign in t.lower() for ign in ["xfwm4", "xfce4-panel", "desktop", "wrapper"]):
+                        windows.append({"window_id": wid.strip(), "title": t})
+        except Exception:
+            pass
+
     return windows
 
 
@@ -396,13 +411,28 @@ def desktop_window_control(action: str, target: str = None):
             closed = []
             for w in wins:
                 title = w["title"]
+                win_id = w["window_id"]
                 if not any(ign in title.lower() for ign in ["swades", "xfce", "panel", "desktop"]):
-                    subprocess.run(["wmctrl", "-c", title], check=False)
+                    subprocess.run(["wmctrl", "-i", "-c", win_id], check=False)
                     closed.append(title)
+            # Also terminate any running browser processes so Chrome/Chromium window definitely closes!
+            subprocess.run(["pkill", "-f", "google-chrome"], check=False)
+            subprocess.run(["pkill", "-f", "chromium"], check=False)
+            if not closed:
+                closed = ["Browser and desktop applications"]
             return {"success": True, "action": "close_all", "closed": closed}
         else:
-            subprocess.run(["wmctrl", "-c", target], check=False)
-            return {"success": True, "action": "close", "target": target}
+            wins = get_desktop_windows()
+            closed = []
+            for w in wins:
+                title = w["title"]
+                if target.lower() in title.lower():
+                    subprocess.run(["wmctrl", "-i", "-c", w["window_id"]], check=False)
+                    closed.append(title)
+            if not closed:
+                subprocess.run(["wmctrl", "-c", target], check=False)
+                closed.append(target)
+            return {"success": True, "action": "close", "closed": closed}
 
     return {"error": f"Unknown window control action '{action}'"}
 
