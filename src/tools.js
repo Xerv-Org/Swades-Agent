@@ -1550,7 +1550,15 @@ const TOOL_REGISTRY = {
   verify_dom_state: verifyDomStateTool,
   // Git state rewind
   rewind_to_checkpoint: rewindCheckpointTool,
-  // Low-Level CUA & Desktop Perception tools (zero-screenshot hooks)
+  // Direct Playwright Browser & Desktop Tools
+  browser_navigate: (args) => executeCuaTool("browser_navigate", args),
+  browser_snapshot: (args) => executeCuaTool("browser_snapshot", args),
+  browser_click: (args) => executeCuaTool("browser_click", args),
+  browser_type: (args) => executeCuaTool("browser_type", args),
+  browser_scroll: (args) => executeCuaTool("browser_scroll", args),
+  desktop_window_control: (args) => executeCuaTool("desktop_window_control", args),
+  desktop_interact: (args) => executeCuaTool("desktop_interact", args),
+  // Legacy CUA aliases
   read_screen_tree: (args) => executeCuaTool("read_screen_tree", args),
   list_open_windows: (args) => executeCuaTool("list_open_windows", args),
   get_focused_element: (args) => executeCuaTool("get_focused_element", args),

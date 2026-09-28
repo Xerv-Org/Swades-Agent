@@ -378,7 +378,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     <!-- Chat Pane -->
     <div class="chat-pane">
       <div class="chips-bar">
-        <button class="chip-item" onclick="triggerChip('Open Chromium and search for latest AI news')">🌐 Browse Web</button>
+        <button class="chip-item" onclick="triggerChip('Search for latest AMD MI300X specs and summarize in a table')">🌐 Browse Web (Playwright)</button>
         <button class="chip-item" onclick="triggerChip('List open user windows')">🔍 Scan Windows</button>
         <button class="chip-item" onclick="triggerChip('Close all open windows')">❌ Close All</button>
       </div>
