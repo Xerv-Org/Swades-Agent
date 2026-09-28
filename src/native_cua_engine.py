@@ -114,23 +114,42 @@ def browser_snapshot():
             title = page.title()
             url = page.url
 
-            # Extract main content text (excluding boilerplate header navigation)
+            # Extract main content or spec highlights
             main_text = ""
-            for selector in ['#rso', '[role="main"]', 'main', 'article', '#main', 'body']:
-                loc = page.locator(selector).first
+            if "google.com/search" not in url:
                 try:
-                    if loc.count() > 0:
-                        txt = loc.inner_text(timeout=1000).strip()
-                        if len(txt) > 40:
-                            lines = [l.strip() for l in txt.split("\n") if l.strip()]
-                            clean_lines = [l for l in lines if l not in [
-                                "Web results", "Search Results", "AI Mode", "All", 
-                                "Images", "Shopping", "Videos", "News", "Forums", "More", "Tools"
-                            ]]
-                            main_text = "\n".join(clean_lines)
-                            break
+                    body_txt = page.locator("body").inner_text()
+                    spec_paragraphs = []
+                    for p_chunk in body_txt.split("\n\n"):
+                        p_clean = p_chunk.strip().replace("\n", " ")
+                        if len(p_clean) > 25 and any(k in p_clean.lower() for k in [
+                            "hbm", "bandwidth", "flop", "tflops", "compute", "tdp", "memory", 
+                            "transistor", "ghz", "architecture", "cdna", "hopper", "cuda", "rocm", "specs", "benchmark"
+                        ]):
+                            spec_paragraphs.append(p_clean)
+                            if len("\n\n".join(spec_paragraphs)) > 1200:
+                                break
+                    if spec_paragraphs:
+                        main_text = "\n\n".join(spec_paragraphs)
                 except Exception:
                     pass
+
+            if not main_text:
+                for selector in ['#rso', '[role="main"]', 'main', 'article', '#main', 'body']:
+                    loc = page.locator(selector).first
+                    try:
+                        if loc.count() > 0:
+                            txt = loc.inner_text(timeout=1000).strip()
+                            if len(txt) > 40:
+                                lines = [l.strip() for l in txt.split("\n") if l.strip()]
+                                clean_lines = [l for l in lines if l not in [
+                                    "Web results", "Search Results", "AI Mode", "All", 
+                                    "Images", "Shopping", "Videos", "News", "Forums", "More", "Tools"
+                                ]]
+                                main_text = "\n".join(clean_lines)
+                                break
+                    except Exception:
+                        pass
 
             # Structured search results extraction (Google / DuckDuckGo / Bing cards)
             search_cards = []
