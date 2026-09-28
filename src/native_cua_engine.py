@@ -82,13 +82,38 @@ def get_playwright_page(p):
     ensure_chrome()
     browser = p.chromium.connect_over_cdp(CDP_URL, timeout=4000)
     context = browser.contexts[0] if browser.contexts else browser.new_context()
-    page = context.pages[0] if context.pages else context.new_page()
-    return browser, page
+    
+    # Find active non-empty page or newest page
+    target_page = None
+    for pg in reversed(context.pages):
+        if pg.url and pg.url != "about:blank":
+            target_page = pg
+            break
+    if not target_page:
+        target_page = context.pages[-1] if context.pages else context.new_page()
+    
+    try:
+        target_page.wait_for_load_state("domcontentloaded", timeout=2000)
+    except Exception:
+        pass
+
+    return browser, target_page
 
 
 def _extract_page_snapshot(page, browser=None):
     """Extracts structured content, search results, and interactive elements from active page."""
     try:
+        # Check if page is in a dynamic loading transition (e.g. Richup / SPA "Loading game...")
+        for _ in range(8):
+            try:
+                raw_body = page.locator("body").inner_text(timeout=400).strip()
+                if "loading game" in raw_body.lower() or len(raw_body) < 5:
+                    time.sleep(0.5)
+                else:
+                    break
+            except Exception:
+                time.sleep(0.3)
+
         title = page.title()
         url = page.url
 
@@ -109,6 +134,9 @@ def _extract_page_snapshot(page, browser=None):
                             break
                 if spec_paragraphs:
                     main_text = "\n\n".join(spec_paragraphs)
+                elif body_txt:
+                    lines = [l.strip() for l in body_txt.split("\n") if l.strip()]
+                    main_text = "\n".join(lines[:30])
             except Exception:
                 pass
 
@@ -132,21 +160,8 @@ def _extract_page_snapshot(page, browser=None):
         # Structured search results extraction (Google search cards)
         search_cards = []
         try:
-            card_data = page.evaluate("""() => {
-                const cards = [];
-                const gCards = document.querySelectorAll('#rso .g');
-                for (const el of gCards) {
-                    const h = el.querySelector('h3');
-                    const txt = (el.innerText || '').trim();
-                    if (h && txt) {
-                        cards.push({
-                            title: h.innerText.trim(),
-                            snippet: txt.slice(0, 300).replace(/\\n+/g, ' ')
-                        });
-                    }
-                }
-                return cards.slice(0, 5);
-            }""")
+            js_cards = "() => Array.from(document.querySelectorAll('#rso .g')).map(el => ({ title: el.querySelector('h3')?.innerText?.trim() || '', snippet: (el.innerText || '').slice(0, 300) })).filter(c => c.title).slice(0, 5)"
+            card_data = page.evaluate(js_cards)
             if card_data:
                 search_cards = card_data
         except Exception:
@@ -155,25 +170,8 @@ def _extract_page_snapshot(page, browser=None):
         # Key interactive elements
         interactive_items = []
         try:
-            interactive_items = page.evaluate("""() => {
-                const items = [];
-                const els = document.querySelectorAll('h1, h2, h3, a[href], button');
-                const seen = new Set();
-                for (const el of els) {
-                    const txt = (el.innerText || el.textContent || '').trim();
-                    if (txt && txt.length > 2 && !seen.has(txt)) {
-                        seen.add(txt);
-                        const tag = el.tagName.toLowerCase();
-                        const role = el.getAttribute('role') || (tag.startsWith('h') ? 'heading' : (tag === 'a' ? 'link' : tag));
-                        items.push({
-                            role: role,
-                            name: txt.slice(0, 80)
-                        });
-                        if (items.length >= 20) break;
-                    }
-                }
-                return items;
-            }""")
+            js_items = "() => Array.from(document.querySelectorAll('h1, h2, h3, a[href], button, [role=\"button\"], input, select, [tabindex=\"0\"]')).map(el => ({ role: el.getAttribute('role') || (el.tagName.toLowerCase().startsWith('h') ? 'heading' : (el.tagName.toLowerCase() === 'a' ? 'link' : el.tagName.toLowerCase())), name: (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 80) })).filter(el => el.name.length >= 2).slice(0, 30)"
+            interactive_items = page.evaluate(js_items)
         except Exception:
             pass
 
@@ -189,7 +187,7 @@ def _extract_page_snapshot(page, browser=None):
                 "url": url,
                 "content_summary": main_text[:1400] if main_text else "",
                 "search_results": search_cards if search_cards else None,
-                "elements": interactive_items[:15]
+                "elements": interactive_items[:25]
             },
             "desktop_context": desktop_wins
         }
@@ -254,7 +252,7 @@ def browser_click(target: str):
                 try:
                     loc = page.get_by_role(role, name=clean_target, exact=False).first
                     if loc.count() > 0:
-                        loc.click(timeout=4000)
+                        loc.click(timeout=2500, no_wait_after=True)
                         clicked = True
                         break
                 except Exception as e:
@@ -265,38 +263,88 @@ def browser_click(target: str):
                 try:
                     loc = page.get_by_text(clean_target, exact=False).first
                     if loc.count() > 0:
-                        loc.click(timeout=4000)
+                        loc.click(timeout=2500, no_wait_after=True)
                         clicked = True
                 except Exception as e:
                     last_err = e
 
-            # 3. Try locator with regex keywords (e.g. "AMD Instinct")
+            # 3. Try get_by_label / aria-label
+            if not clicked:
+                try:
+                    loc = page.get_by_label(clean_target, exact=False).first
+                    if loc.count() > 0:
+                        loc.click(timeout=2500, no_wait_after=True)
+                        clicked = True
+                except Exception as e:
+                    last_err = e
+
+            # 4. If target is 'Join game' and Join button is disabled due to unselected appearance, pick appearance first
+            if not clicked or target.lower() in ["join game", "join"]:
+                try:
+                    join_btn = page.get_by_role("button", name="Join game", exact=False).first
+                    if join_btn.count() > 0 and join_btn.is_disabled():
+                        # Pick first enabled appearance button
+                        avail = page.locator("button[aria-label^='Select appearance']:not([disabled]), button.Oxb80mwm:not([disabled])").first
+                        if avail.count() > 0:
+                            avail.click(timeout=1500, no_wait_after=True)
+                            time.sleep(0.3)
+                            join_btn.click(timeout=2500, no_wait_after=True)
+                            clicked = True
+                except Exception as e:
+                    last_err = e
+
+            # 5. Try locator with regex keywords (e.g. "AMD Instinct")
             if not clicked and first_keywords:
                 try:
                     pattern = re.compile(re.escape(first_keywords), re.IGNORECASE)
-                    loc = page.locator("a, button, [role='button'], h3").filter(has_text=pattern).first
+                    loc = page.locator("a, button, [role='button'], h3, input, [aria-label]").filter(has_text=pattern).first
                     if loc.count() > 0:
-                        loc.click(timeout=4000)
+                        loc.click(timeout=2500, no_wait_after=True)
                         clicked = True
                 except Exception as e:
                     last_err = e
 
-            # 4. Try direct locator
+            # 6. Try direct selector / locator
             if not clicked:
                 try:
                     loc = page.locator(target).first
                     if loc.count() > 0:
-                        loc.click(timeout=4000)
+                        loc.click(timeout=2500, no_wait_after=True)
                         clicked = True
                 except Exception as e:
                     last_err = e
 
-            if clicked:
+            # 7. JavaScript Direct DOM Click fallback
+            if not clicked:
                 try:
-                    page.wait_for_load_state("domcontentloaded", timeout=4000)
+                    js_click = """(t) => {
+                        const targetLower = t.toLowerCase();
+                        const elements = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex="0"]'));
+                        for (const el of elements) {
+                            const txt = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
+                            if (txt && (txt === targetLower || txt.includes(targetLower) || targetLower.includes(txt))) {
+                                el.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }"""
+                    clicked = page.evaluate(js_click, clean_target)
+                except Exception as e:
+                    last_err = e
+
+            # 8. Fallback force click if element was disabled/partially obscured
+            if not clicked:
+                try:
+                    loc = page.get_by_text(clean_target, exact=False).first
+                    if loc.count() > 0:
+                        loc.click(force=True, timeout=1500, no_wait_after=True)
+                        clicked = True
                 except Exception:
                     pass
-                time.sleep(0.5)
+
+            if clicked:
+                time.sleep(0.6)
                 # Return live snapshot of the new page right away!
                 return _extract_page_snapshot(page, browser)
 
@@ -461,24 +509,24 @@ def main():
 
     cmd = sys.argv[1].lower()
 
-    if cmd in ["snapshot", "read_screen_tree", "dump"]:
+    if cmd in ["snapshot", "browser_snapshot", "read_screen_tree", "dump"]:
         print(json.dumps(browser_snapshot(), indent=2))
-    elif cmd in ["navigate", "goto", "open"]:
+    elif cmd in ["navigate", "browser_navigate", "goto", "open"]:
         url = sys.argv[2] if len(sys.argv) > 2 else "https://google.com"
         print(json.dumps(browser_navigate(url), indent=2))
-    elif cmd in ["click"]:
+    elif cmd in ["click", "browser_click"]:
         target = sys.argv[2] if len(sys.argv) > 2 else ""
         print(json.dumps(browser_click(target), indent=2))
-    elif cmd in ["type", "fill"]:
+    elif cmd in ["type", "browser_type", "fill"]:
         target = sys.argv[2] if len(sys.argv) > 2 else ""
         text = sys.argv[3] if len(sys.argv) > 3 else ""
         press_enter = ("--enter" in sys.argv or "-e" in sys.argv)
         print(json.dumps(browser_type(target, text, press_enter), indent=2))
-    elif cmd in ["scroll"]:
+    elif cmd in ["scroll", "browser_scroll"]:
         direction = sys.argv[2] if len(sys.argv) > 2 else "down"
         amount = int(sys.argv[3]) if len(sys.argv) > 3 else 500
         print(json.dumps(browser_scroll(direction, amount), indent=2))
-    elif cmd in ["windows", "window_control"]:
+    elif cmd in ["windows", "window_control", "desktop_window_control"]:
         action = sys.argv[2] if len(sys.argv) > 2 else "list"
         target = sys.argv[3] if len(sys.argv) > 3 else None
         print(json.dumps(desktop_window_control(action, target), indent=2))

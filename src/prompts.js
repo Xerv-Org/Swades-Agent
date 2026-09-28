@@ -107,13 +107,19 @@ You interact with the browser and Linux desktop natively via direct Playwright b
    - The returned observation already contains the side-by-side comparison (Memory, Bandwidth, TFLOPs, Architecture).
    - Deliver the comparison markdown table directly on the very next step!
 
-3. CLOSING WINDOWS & APPS:
+3. INTERACTIVE WEB APPS & GAMES (e.g. Richup.io, single-page apps, dashboards):
+   - When filling forms or names, use browser_type(target="placeholder or role", text="...")
+   - When clicking buttons (e.g. 'Create a private game', 'Join game', 'Enter Game'), use browser_click(target="Button Text")
+   - For appearance/color choices or avatars, click the specific option before joining
+   - Cloudflare Turnstile CAPTCHA: If a verification challenge appears, browser_snapshot / browser_click will automatically attempt to bypass it or notify you. You can also click the verification box directly.
+
+4. CLOSING WINDOWS & APPS:
    - To list open desktop windows: desktop_window_control(action="list")
    - To focus a window: desktop_window_control(action="focus", target="window title")
    - To close an app or all user apps: desktop_window_control(action="close", target="all")
 
-4. PROACTIVE & DIRECT:
-   - Fast 2-step completion: Step 1 = browser_navigate ➔ Step 2 = Final answer table!`;
+5. PROACTIVE & DIRECT:
+   - Fast completion: Execute the necessary steps smoothly without infinite loops or unnecessary re-snapshots!`;
 
 export const TOOL_SCHEMAS = [
   {
