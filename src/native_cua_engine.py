@@ -78,22 +78,33 @@ def ensure_chrome():
 
 
 def get_playwright_page(p):
-    """Connects over CDP and returns the active or newest page."""
+    """Connects over CDP and returns the active page with real content."""
     ensure_chrome()
     browser = p.chromium.connect_over_cdp(CDP_URL, timeout=4000)
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     
-    # Find active non-empty page or newest page
+    # Check all pages to find the one with real content
     target_page = None
-    for pg in reversed(context.pages):
-        if pg.url and pg.url != "about:blank":
-            target_page = pg
-            break
-    if not target_page:
-        target_page = context.pages[-1] if context.pages else context.new_page()
+    for pg in context.pages:
+        if pg.url and not pg.url.startswith("chrome://") and not pg.url.startswith("about:"):
+            try:
+                txt = pg.locator("body").inner_text(timeout=300).strip()
+                if len(txt) > 20 or pg.title():
+                    target_page = pg
+                    break
+            except Exception:
+                pass
     
+    if not target_page:
+        for pg in context.pages:
+            if pg.url and not pg.url.startswith("chrome://") and not pg.url.startswith("about:"):
+                target_page = pg
+                break
+    if not target_page:
+        target_page = context.pages[0] if context.pages else context.new_page()
+
     try:
-        target_page.wait_for_load_state("domcontentloaded", timeout=2000)
+        target_page.bring_to_front()
     except Exception:
         pass
 
@@ -104,17 +115,19 @@ def _extract_page_snapshot(page, browser=None):
     """Extracts structured content, search results, and interactive elements from active page."""
     try:
         # Check if page is in a dynamic loading transition (e.g. Richup / SPA "Loading game...")
-        for _ in range(8):
+        title = ""
+        url = page.url
+        for _ in range(10):
             try:
+                title = page.title()
                 raw_body = page.locator("body").inner_text(timeout=400).strip()
-                if "loading game" in raw_body.lower() or len(raw_body) < 5:
-                    time.sleep(0.5)
+                if "loading game" in raw_body.lower() or len(raw_body) < 5 or not title:
+                    time.sleep(0.4)
                 else:
                     break
             except Exception:
                 time.sleep(0.3)
 
-        title = page.title()
         url = page.url
 
         # Extract main content or spec highlights
@@ -169,18 +182,22 @@ def _extract_page_snapshot(page, browser=None):
 
         # Key interactive elements
         interactive_items = []
-        try:
-            js_items = "() => Array.from(document.querySelectorAll('h1, h2, h3, a[href], button, [role=\"button\"], input, select, [tabindex=\"0\"]')).map(el => ({ role: el.getAttribute('role') || (el.tagName.toLowerCase().startsWith('h') ? 'heading' : (el.tagName.toLowerCase() === 'a' ? 'link' : el.tagName.toLowerCase())), name: (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 80) })).filter(el => el.name.length >= 2).slice(0, 30)"
-            interactive_items = page.evaluate(js_items)
-        except Exception:
-            pass
+        for _ in range(5):
+            try:
+                js_items = "() => Array.from(document.querySelectorAll('h1, h2, h3, a[href], button, [role=\"button\"], input, select, [tabindex=\"0\"]')).map(el => ({ role: el.getAttribute('role') || (el.tagName.toLowerCase().startsWith('h') ? 'heading' : (el.tagName.toLowerCase() === 'a' ? 'link' : el.tagName.toLowerCase())), name: (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 80) })).filter(el => el.name.length >= 2).slice(0, 30)"
+                items = page.evaluate(js_items)
+                if items:
+                    interactive_items = items
+                    break
+            except Exception:
+                time.sleep(0.3)
 
         desktop_wins = get_desktop_windows()
 
         return {
             "browser_context": {
                 "role": "WebArea",
-                "title": title,
+                "title": title or "Active Page",
                 "url": url,
                 "content_summary": main_text[:1400] if main_text else "",
                 "search_results": search_cards if search_cards else None,
@@ -239,104 +256,69 @@ def browser_click(target: str):
             words = [w for w in clean_target.split() if len(w) > 2]
             first_keywords = " ".join(words[:2]) if len(words) >= 2 else clean_target
 
-            # 1. Try get_by_role (button or link)
-            for role in ["button", "link"]:
-                try:
-                    loc = page.get_by_role(role, name=clean_target, exact=False).first
-                    if loc.count() > 0:
-                        loc.click(timeout=2500, no_wait_after=True)
-                        clicked = True
-                        break
-                except Exception as e:
-                    last_err = e
+            # 1. JavaScript Direct DOM Click (Fastest and Most Reliable for SPAs)
+            try:
+                js_click = """(t) => {
+                    const targetLower = t.toLowerCase();
+                    const elements = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex="0"], div, span'));
+                    for (const el of elements) {
+                        const txt = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
+                        if (txt && (txt === targetLower || txt.includes(targetLower) || targetLower.includes(txt))) {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }"""
+                clicked = page.evaluate(js_click, clean_target)
+            except Exception as e:
+                last_err = e
 
-            # 2. Try get_by_text with clean target
+            # 2. Try get_by_role (button or link)
+            if not clicked:
+                for role in ["button", "link"]:
+                    try:
+                        loc = page.get_by_role(role, name=clean_target, exact=False).first
+                        if loc.count() > 0:
+                            loc.click(timeout=2000, no_wait_after=True)
+                            clicked = True
+                            break
+                    except Exception as e:
+                        last_err = e
+
+            # 3. Try get_by_text with clean target
             if not clicked:
                 try:
                     loc = page.get_by_text(clean_target, exact=False).first
                     if loc.count() > 0:
-                        loc.click(timeout=2500, no_wait_after=True)
+                        loc.click(timeout=2000, no_wait_after=True)
                         clicked = True
                 except Exception as e:
                     last_err = e
 
-            # 3. Try get_by_label / aria-label
-            if not clicked:
-                try:
-                    loc = page.get_by_label(clean_target, exact=False).first
-                    if loc.count() > 0:
-                        loc.click(timeout=2500, no_wait_after=True)
-                        clicked = True
-                except Exception as e:
-                    last_err = e
-
-            # 4. If target is 'Join game' and Join button is disabled due to unselected appearance, pick appearance first
-            if not clicked or target.lower() in ["join game", "join"]:
-                try:
-                    join_btn = page.get_by_role("button", name="Join game", exact=False).first
-                    if join_btn.count() > 0 and join_btn.is_disabled():
-                        # Pick first enabled appearance button
-                        avail = page.locator("button[aria-label^='Select appearance']:not([disabled]), button.Oxb80mwm:not([disabled])").first
-                        if avail.count() > 0:
-                            avail.click(timeout=1500, no_wait_after=True)
-                            time.sleep(0.3)
-                            join_btn.click(timeout=2500, no_wait_after=True)
-                            clicked = True
-                except Exception as e:
-                    last_err = e
-
-            # 5. Try locator with regex keywords (e.g. "AMD Instinct")
+            # 4. Try locator with regex keywords (e.g. "Play", "AMD Instinct")
             if not clicked and first_keywords:
                 try:
                     pattern = re.compile(re.escape(first_keywords), re.IGNORECASE)
                     loc = page.locator("a, button, [role='button'], h3, input, [aria-label]").filter(has_text=pattern).first
                     if loc.count() > 0:
-                        loc.click(timeout=2500, no_wait_after=True)
+                        loc.click(timeout=2000, no_wait_after=True)
                         clicked = True
                 except Exception as e:
                     last_err = e
 
-            # 6. Try direct selector / locator
+            # 5. Try direct selector / locator
             if not clicked:
                 try:
                     loc = page.locator(target).first
                     if loc.count() > 0:
-                        loc.click(timeout=2500, no_wait_after=True)
+                        loc.click(timeout=2000, no_wait_after=True)
                         clicked = True
                 except Exception as e:
                     last_err = e
-
-            # 7. JavaScript Direct DOM Click fallback
-            if not clicked:
-                try:
-                    js_click = """(t) => {
-                        const targetLower = t.toLowerCase();
-                        const elements = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex="0"]'));
-                        for (const el of elements) {
-                            const txt = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
-                            if (txt && (txt === targetLower || txt.includes(targetLower) || targetLower.includes(txt))) {
-                                el.click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    }"""
-                    clicked = page.evaluate(js_click, clean_target)
-                except Exception as e:
-                    last_err = e
-
-            # 8. Fallback force click if element was disabled/partially obscured
-            if not clicked:
-                try:
-                    loc = page.get_by_text(clean_target, exact=False).first
-                    if loc.count() > 0:
-                        loc.click(force=True, timeout=1500, no_wait_after=True)
-                        clicked = True
-                except Exception:
-                    pass
 
             if clicked:
-                time.sleep(0.6)
+                time.sleep(0.8)
                 # Return live snapshot of the new page right away!
                 return _extract_page_snapshot(page, browser)
 
