@@ -175,9 +175,6 @@ def _extract_page_snapshot(page, browser=None):
         except Exception:
             pass
 
-        if browser:
-            browser.close()
-
         desktop_wins = get_desktop_windows()
 
         return {
@@ -192,11 +189,6 @@ def _extract_page_snapshot(page, browser=None):
             "desktop_context": desktop_wins
         }
     except Exception as e:
-        if browser:
-            try:
-                browser.close()
-            except Exception:
-                pass
         return {
             "browser_context": {"status": f"CDP Offline: {str(e)}"},
             "desktop_context": get_desktop_windows()
@@ -348,7 +340,6 @@ def browser_click(target: str):
                 # Return live snapshot of the new page right away!
                 return _extract_page_snapshot(page, browser)
 
-            browser.close()
             return {"success": False, "error": f"Element '{target}' not found: {str(last_err)}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -363,33 +354,52 @@ def browser_type(target: str, text: str, press_enter: bool = False):
             typed = False
             last_err = None
 
-            # Try by role, placeholder, or locator
+            clean_target = re.sub(r"[™®©'\"\[\]]", "", target).strip()
+
+            # Try by placeholder, role, label, value, exact selector, or visible input
             for try_func in [
-                lambda: page.get_by_placeholder(target, exact=False).first,
-                lambda: page.get_by_role("textbox", name=target, exact=False).first,
+                lambda: page.get_by_placeholder(clean_target, exact=False).first,
+                lambda: page.get_by_role("textbox", name=clean_target, exact=False).first,
+                lambda: page.get_by_label(clean_target, exact=False).first,
+                lambda: page.locator(f"input[value*='{clean_target}']").first,
                 lambda: page.locator(target).first,
-                lambda: page.locator("textarea:visible, input[type='text']:visible, input[name='q']:visible, input:not([type='hidden']):visible").first
+                lambda: page.locator("input:not([type='hidden']), textarea").first
             ]:
                 try:
                     loc = try_func()
                     if loc.count() > 0:
-                        loc.fill(text, timeout=3000)
+                        loc.fill(text, timeout=2500, no_wait_after=True)
                         if press_enter:
-                            loc.press("Enter")
-                            try:
-                                page.wait_for_load_state("domcontentloaded", timeout=4000)
-                            except Exception:
-                                pass
-                            time.sleep(0.5)
+                            loc.press("Enter", timeout=2000, no_wait_after=True)
                         typed = True
                         break
                 except Exception as e:
                     last_err = e
 
+            # JavaScript DOM Fill fallback
+            if not typed:
+                try:
+                    js_fill = """([val, targetVal]) => {
+                        const t = (targetVal || '').toLowerCase();
+                        let inputs = Array.from(document.querySelectorAll('input:not([type=hidden]), textarea'));
+                        let el = inputs.find(i => (i.placeholder||'').toLowerCase().includes(t) || (i.value||'').toLowerCase().includes(t) || (i.name||'').toLowerCase().includes(t)) || inputs[0];
+                        if (el) {
+                            el.focus();
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }
+                        return false;
+                    }"""
+                    typed = page.evaluate(js_fill, [text, clean_target])
+                except Exception as e:
+                    last_err = e
+
             if typed:
+                time.sleep(0.4)
                 return _extract_page_snapshot(page, browser)
 
-            browser.close()
             return {"success": False, "error": f"Target '{target}' not found for typing: {str(last_err)}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
