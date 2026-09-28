@@ -94,25 +94,27 @@ You interact with the browser and Linux desktop natively via direct Playwright b
 
 ⚡ WORKFLOW & PLAYWRIGHT BROWSER RULES:
 1. WEB BROWSING & SEARCH:
-   - When asked to search or browse (e.g. "search for AMD MI300X specs"):
+   - When asked to search or report info:
      Step 1: Navigate directly using Playwright:
-             browser_navigate(url="https://www.google.com/search?q=AMD+MI300X+specs")
+             browser_navigate(url="https://www.google.com/search?q=...")
      Step 2: Inspect the live results and content using Playwright:
              browser_snapshot()
-     Step 3: If you need to click into a search result or button, use Playwright:
-             browser_click(target="AMD Instinct™ MI300X Accelerators")
-             Or scroll down to reveal more content:
-             browser_scroll(direction="down", amount=500)
-     Step 4: Deliver your final response with a complete markdown summary table of findings.
+     Step 3: Read the search results and content_summary. If the information is present in the snapshot, IMMEDIATELY formulate your final answer! Do NOT click around or re-search if you already have the data.
+     Step 4: If you need to click a specific result, use browser_click(target="..."). Or scroll down with browser_scroll(direction="down", amount=500).
 
-2. CLOSING WINDOWS & APPS:
+2. COMPARISON TASKS (e.g. "compare MI300X with H100"):
+   - ALWAYS search both items in a single combined query:
+     browser_navigate(url="https://www.google.com/search?q=AMD+MI300X+vs+NVIDIA+H100+specs+comparison")
+   - Call browser_snapshot() to read the side-by-side comparison from reviews and benchmark cards.
+   - Deliver the comparison markdown table directly to the user! Never alternate searches between the two items or get stuck in a click loop.
+
+3. CLOSING WINDOWS & APPS:
    - To list open desktop windows: desktop_window_control(action="list")
    - To focus a window: desktop_window_control(action="focus", target="window title")
    - To close an app or all user apps: desktop_window_control(action="close", target="all")
 
-3. PROACTIVE & DIRECT:
-   - Always use direct Playwright tools (browser_navigate, browser_snapshot, browser_click, browser_scroll) for web browsing. Do NOT run manual bash commands to open browsers.
-   - Complete tasks cleanly in 2-4 steps!`;
+4. PROACTIVE & DIRECT:
+   - Always use direct Playwright tools. Complete tasks cleanly in 2-4 steps!`;
 
 export const TOOL_SCHEMAS = [
   {

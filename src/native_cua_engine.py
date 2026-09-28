@@ -116,13 +116,18 @@ def browser_snapshot():
 
             # Extract main content text (excluding boilerplate header navigation)
             main_text = ""
-            for selector in ['#main', '#rso', '[role="main"]', 'article', 'main', 'body']:
+            for selector in ['#rso', '[role="main"]', 'main', 'article', '#main', 'body']:
                 loc = page.locator(selector).first
                 try:
                     if loc.count() > 0:
                         txt = loc.inner_text(timeout=1000).strip()
                         if len(txt) > 40:
-                            main_text = txt
+                            lines = [l.strip() for l in txt.split("\n") if l.strip()]
+                            clean_lines = [l for l in lines if l not in [
+                                "Web results", "Search Results", "AI Mode", "All", 
+                                "Images", "Shopping", "Videos", "News", "Forums", "More", "Tools"
+                            ]]
+                            main_text = "\n".join(clean_lines)
                             break
                 except Exception:
                     pass
@@ -133,7 +138,7 @@ def browser_snapshot():
                 card_data = page.evaluate("""() => {
                     const cards = [];
                     // Google search cards
-                    const gCards = document.querySelectorAll('#rso .g, #rso div[data-hveid]');
+                    const gCards = document.querySelectorAll('#rso .g');
                     for (const el of gCards) {
                         const h = el.querySelector('h3');
                         const a = el.querySelector('a[href]');
@@ -141,12 +146,11 @@ def browser_snapshot():
                         if (h && txt) {
                             cards.push({
                                 title: h.innerText.trim(),
-                                url: a ? a.href : '',
-                                snippet: txt.slice(0, 350).replace(/\\n+/g, ' ')
+                                snippet: txt.slice(0, 300).replace(/\\n+/g, ' ')
                             });
                         }
                     }
-                    return cards.slice(0, 6);
+                    return cards.slice(0, 5);
                 }""")
                 if card_data:
                     search_cards = card_data
@@ -158,20 +162,19 @@ def browser_snapshot():
             try:
                 interactive_items = page.evaluate("""() => {
                     const items = [];
-                    const els = document.querySelectorAll('h1, h2, h3, a[href], button, input, [role="button"]');
+                    const els = document.querySelectorAll('h1, h2, h3, a[href], button');
                     const seen = new Set();
                     for (const el of els) {
-                        const txt = (el.innerText || el.textContent || el.value || '').trim();
+                        const txt = (el.innerText || el.textContent || '').trim();
                         if (txt && txt.length > 2 && !seen.has(txt)) {
                             seen.add(txt);
                             const tag = el.tagName.toLowerCase();
                             const role = el.getAttribute('role') || (tag.startsWith('h') ? 'heading' : (tag === 'a' ? 'link' : tag));
                             items.push({
                                 role: role,
-                                name: txt.slice(0, 100),
-                                value: el.value || undefined
+                                name: txt.slice(0, 80)
                             });
-                            if (items.length >= 30) break;
+                            if (items.length >= 20) break;
                         }
                     }
                     return items;
@@ -189,9 +192,9 @@ def browser_snapshot():
                     "role": "WebArea",
                     "title": title,
                     "url": url,
-                    "content_summary": main_text[:1500] if main_text else "",
+                    "content_summary": main_text[:1400] if main_text else "",
                     "search_results": search_cards if search_cards else None,
-                    "elements": interactive_items[:25]
+                    "elements": interactive_items[:15]
                 },
                 "desktop_context": desktop_wins
             }
@@ -203,18 +206,23 @@ def browser_snapshot():
 
 
 def browser_click(target: str):
-    """Clicks an element by role, text, or selector using Playwright."""
+    """Clicks an element by role, text, or selector using Playwright with fuzzy matching."""
     try:
+        import re
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
             clicked = False
             last_err = None
 
+            clean_target = re.sub(r"[™®©'\"\[\]]", "", target).strip()
+            words = [w for w in clean_target.split() if len(w) > 2]
+            first_keywords = " ".join(words[:2]) if len(words) >= 2 else clean_target
+
             # 1. Try get_by_role (button or link)
             for role in ["button", "link"]:
                 try:
-                    loc = page.get_by_role(role, name=target, exact=False).first
+                    loc = page.get_by_role(role, name=clean_target, exact=False).first
                     if loc.count() > 0:
                         loc.click(timeout=4000)
                         clicked = True
@@ -222,17 +230,28 @@ def browser_click(target: str):
                 except Exception as e:
                     last_err = e
 
-            # 2. Try get_by_text
+            # 2. Try get_by_text with clean target
             if not clicked:
                 try:
-                    loc = page.get_by_text(target, exact=False).first
+                    loc = page.get_by_text(clean_target, exact=False).first
                     if loc.count() > 0:
                         loc.click(timeout=4000)
                         clicked = True
                 except Exception as e:
                     last_err = e
 
-            # 3. Try direct locator
+            # 3. Try locator with regex keywords (e.g. "AMD Instinct")
+            if not clicked and first_keywords:
+                try:
+                    pattern = re.compile(re.escape(first_keywords), re.IGNORECASE)
+                    loc = page.locator("a, button, [role='button'], h3").filter(has_text=pattern).first
+                    if loc.count() > 0:
+                        loc.click(timeout=4000)
+                        clicked = True
+                except Exception as e:
+                    last_err = e
+
+            # 4. Try direct locator
             if not clicked:
                 try:
                     loc = page.locator(target).first

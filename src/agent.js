@@ -34,7 +34,7 @@ export function appendChatLog(sender, text) {
     }
     const d = new Date();
     const timeStr = d.toTimeString().split(" ")[0];
-    logs.push({ sender, text: String(text).slice(0, 1500), time: timeStr });
+    logs.push({ sender, text: String(text).slice(0, 4000), time: timeStr });
     if (logs.length > 300) logs = logs.slice(-300);
     writeFileSync(logFile, JSON.stringify(logs, null, 2));
   } catch (_) {}
@@ -108,6 +108,17 @@ class LoopDetector {
         // Different call — reset block tracking
         this._lastBlock = null;
         this._blockCount = 0;
+      }
+    }
+
+    // ---- Check 2b: Detect alternating cycle loops (e.g. A -> B -> A -> B or A -> B -> C -> A -> B -> C) ----
+    if (this.history.length >= 6) {
+      const h = this.history.slice(-6);
+      const isCycle2 = h[0].name === h[2].name && h[2].name === h[4].name &&
+                       h[1].name === h[3].name && h[3].name === h[5].name;
+      const isCycle3 = h[0].name === h[3].name && h[1].name === h[4].name && h[2].name === h[5].name;
+      if (isCycle2 || isCycle3) {
+        return `🚨 [REPETITIVE CYCLE LOOP DETECTED] You are caught in a repetitive browsing cycle (${h.map(c => c.name).join(" ➔ ")}). STOP calling tools and immediately synthesize your final markdown answer and report it to the user now!`;
       }
     }
 
@@ -361,15 +372,15 @@ ${windowsSummary}${userDocsWarning}
     const cutoff = msgs.length - 3;
     let sanitizedMsgs = msgs.map((m, idx) => {
       if (m.role === "tool" && typeof m.content === "string") {
-        if (idx < cutoff && m.content.length > 1500) {
+        if (idx < cutoff && m.content.length > 2000) {
           return {
             ...m,
-            content: m.content.slice(0, 800) + "\n... [older large output truncated] ...\n" + m.content.slice(-200)
+            content: m.content.slice(0, 1200) + "\n... [older large output truncated] ...\n" + m.content.slice(-300)
           };
-        } else if (m.content.length > 3000) {
+        } else if (m.content.length > 5000) {
           return {
             ...m,
-            content: m.content.slice(0, 1500) + "\n... [large output truncated] ...\n" + m.content.slice(-300)
+            content: m.content.slice(0, 3500) + "\n... [large output truncated] ...\n" + m.content.slice(-400)
           };
         }
       }
