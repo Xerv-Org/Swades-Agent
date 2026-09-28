@@ -238,6 +238,17 @@ def get_browser_cdp_elements():
         return []
 
 def cmd_dump(target=""):
+    try:
+        from native_cua_engine import NativeCUAEngine
+        engine = NativeCUAEngine()
+        state = json.loads(engine.get_integrated_ui_state())
+        browser_ctx = state.get("browser_context", {})
+        if browser_ctx and (browser_ctx.get("children") or browser_ctx.get("name")):
+            print(json.dumps(browser_ctx, indent=2))
+            return
+    except Exception:
+        pass
+
     desktop = Atspi.get_desktop(0)
     node = None
     if target:

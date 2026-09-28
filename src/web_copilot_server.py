@@ -364,11 +364,12 @@ HTML_CONTENT = r"""<!DOCTYPE html>
       <div class="brand-logo">⚡</div>
       <div class="brand-title">Swades Copilot Studio</div>
     </div>
-    <div style="display:flex; align-items:center; gap:12px;">
+    <div style="display:flex; align-items:center; gap:8px;">
       <div class="status-badge" id="statusBadge">
         <span class="status-dot"></span>
         <span id="statusLabel">Ready</span>
       </div>
+      <button id="stopHeaderBtn" onclick="stopTask()" style="display:none; background:rgba(239, 68, 68, 0.15); border:1px solid rgba(239, 68, 68, 0.4); color:#f87171; border-radius:6px; padding:4px 10px; font-size:12px; font-weight:600; cursor:pointer;" title="Stop current task">⏹ Stop</button>
       <button onclick="clearSession()" style="background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:6px; padding:4px 8px; font-size:12px; cursor:pointer;" title="Clear session">🗑️ Clear</button>
     </div>
   </header>
@@ -643,21 +644,39 @@ HTML_CONTENT = r"""<!DOCTYPE html>
       setWorking(false);
     }
 
+    async function stopTask() {
+      try {
+        await fetch("/api/stop", { method: "POST" });
+      } catch (e) {}
+      setWorking(false);
+    }
+
     function setWorking(working) {
       isWorking = working;
       const badge = document.getElementById("statusBadge");
       const label = document.getElementById("statusLabel");
       const btn = document.getElementById("sendBtn");
+      const stopHeaderBtn = document.getElementById("stopHeaderBtn");
+
+      if (stopHeaderBtn) {
+        stopHeaderBtn.style.display = working ? "inline-flex" : "none";
+      }
 
       if (working) {
         badge.className = "status-badge busy";
         label.innerText = "Working...";
-        btn.disabled = true;
-        btn.innerHTML = "<span>...</span>";
+        btn.disabled = false;
+        btn.className = "send-btn stop-active";
+        btn.style.background = "linear-gradient(135deg, #ef4444, #dc2626)";
+        btn.onclick = stopTask;
+        btn.innerHTML = "<span>Stop</span><span>⏹</span>";
       } else {
         badge.className = "status-badge";
         label.innerText = "Ready";
         btn.disabled = false;
+        btn.className = "send-btn";
+        btn.style.background = "linear-gradient(135deg, var(--accent), var(--accent-hover))";
+        btn.onclick = sendTask;
         btn.innerHTML = "<span>Run</span><span>⚡</span>";
       }
     }
@@ -753,8 +772,38 @@ class CopilotHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
 
+        elif parsed.path == "/api/stop":
+            if current_worker and current_worker.poll() is None:
+                try:
+                    current_worker.terminate()
+                    time.sleep(0.3)
+                    if current_worker.poll() is None:
+                        current_worker.kill()
+                except Exception:
+                    pass
+            is_task_running = False
+            current_worker = None
+            now = time.strftime("%H:%M:%S")
+            logs = []
+            if os.path.exists(LOGS_FILE):
+                try:
+                    with open(LOGS_FILE, "r") as f:
+                        logs = json.load(f)
+                except Exception:
+                    logs = []
+            logs.append({"sender": "System", "text": "⏹ Task stopped by user", "time": now})
+            try:
+                with open(LOGS_FILE, "w") as f:
+                    json.dump(logs[-300:], f, indent=2)
+            except Exception:
+                pass
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
+
         elif parsed.path == "/api/clear":
-            global is_task_running, current_worker
             if current_worker and current_worker.poll() is None:
                 try:
                     current_worker.terminate()
