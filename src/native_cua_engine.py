@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 native_cua_engine.py — Unified Native Playwright & Desktop CUA Engine
-Provides direct Playwright browser automation (navigate, snapshot, click, type, scroll)
-and lightweight Linux desktop window/input controls via AT-SPI2 / xdotool / wmctrl.
+Every browser action (navigate, snapshot, click, scroll) returns the live page content!
 """
 
 import sys
 import os
+import re
 import json
 import time
 import subprocess
@@ -85,8 +85,127 @@ def get_playwright_page(p):
     return browser, page
 
 
+def _extract_page_snapshot(page, browser=None):
+    """Extracts structured content, search results, and interactive elements from active page."""
+    try:
+        title = page.title()
+        url = page.url
+
+        # Extract main content or spec highlights
+        main_text = ""
+        if "google.com/search" not in url:
+            try:
+                body_txt = page.locator("body").inner_text()
+                spec_paragraphs = []
+                for p_chunk in body_txt.split("\n\n"):
+                    p_clean = p_chunk.strip().replace("\n", " ")
+                    if len(p_clean) > 25 and any(k in p_clean.lower() for k in [
+                        "hbm", "bandwidth", "flop", "tflops", "compute", "tdp", "memory", 
+                        "transistor", "ghz", "architecture", "cdna", "hopper", "cuda", "rocm", "specs", "benchmark"
+                    ]):
+                        spec_paragraphs.append(p_clean)
+                        if len("\n\n".join(spec_paragraphs)) > 1200:
+                            break
+                if spec_paragraphs:
+                    main_text = "\n\n".join(spec_paragraphs)
+            except Exception:
+                pass
+
+        if not main_text:
+            for selector in ['#rso', '[role="main"]', 'main', 'article', '#main', 'body']:
+                loc = page.locator(selector).first
+                try:
+                    if loc.count() > 0:
+                        txt = loc.inner_text(timeout=1000).strip()
+                        if len(txt) > 40:
+                            lines = [l.strip() for l in txt.split("\n") if l.strip()]
+                            clean_lines = [l for l in lines if l not in [
+                                "Web results", "Search Results", "AI Mode", "All", 
+                                "Images", "Shopping", "Videos", "News", "Forums", "More", "Tools"
+                            ]]
+                            main_text = "\n".join(clean_lines)
+                            break
+                except Exception:
+                    pass
+
+        # Structured search results extraction (Google search cards)
+        search_cards = []
+        try:
+            card_data = page.evaluate("""() => {
+                const cards = [];
+                const gCards = document.querySelectorAll('#rso .g');
+                for (const el of gCards) {
+                    const h = el.querySelector('h3');
+                    const txt = (el.innerText || '').trim();
+                    if (h && txt) {
+                        cards.push({
+                            title: h.innerText.trim(),
+                            snippet: txt.slice(0, 300).replace(/\\n+/g, ' ')
+                        });
+                    }
+                }
+                return cards.slice(0, 5);
+            }""")
+            if card_data:
+                search_cards = card_data
+        except Exception:
+            pass
+
+        # Key interactive elements
+        interactive_items = []
+        try:
+            interactive_items = page.evaluate("""() => {
+                const items = [];
+                const els = document.querySelectorAll('h1, h2, h3, a[href], button');
+                const seen = new Set();
+                for (const el of els) {
+                    const txt = (el.innerText || el.textContent || '').trim();
+                    if (txt && txt.length > 2 && !seen.has(txt)) {
+                        seen.add(txt);
+                        const tag = el.tagName.toLowerCase();
+                        const role = el.getAttribute('role') || (tag.startsWith('h') ? 'heading' : (tag === 'a' ? 'link' : tag));
+                        items.push({
+                            role: role,
+                            name: txt.slice(0, 80)
+                        });
+                        if (items.length >= 20) break;
+                    }
+                }
+                return items;
+            }""")
+        except Exception:
+            pass
+
+        if browser:
+            browser.close()
+
+        desktop_wins = get_desktop_windows()
+
+        return {
+            "browser_context": {
+                "role": "WebArea",
+                "title": title,
+                "url": url,
+                "content_summary": main_text[:1400] if main_text else "",
+                "search_results": search_cards if search_cards else None,
+                "elements": interactive_items[:15]
+            },
+            "desktop_context": desktop_wins
+        }
+    except Exception as e:
+        if browser:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        return {
+            "browser_context": {"status": f"CDP Offline: {str(e)}"},
+            "desktop_context": get_desktop_windows()
+        }
+
+
 def browser_navigate(url: str):
-    """Navigates to URL using Playwright."""
+    """Navigates to URL and immediately returns the extracted live page snapshot."""
     target_url = url.strip()
     if not target_url.startswith(("http://", "https://", "file://", "about:")):
         target_url = f"https://{target_url}"
@@ -97,10 +216,7 @@ def browser_navigate(url: str):
             browser, page = get_playwright_page(p)
             page.goto(target_url, timeout=15000, wait_until="domcontentloaded")
             time.sleep(0.5)
-            title = page.title()
-            final_url = page.url
-            browser.close()
-            return {"success": True, "url": final_url, "title": title}
+            return _extract_page_snapshot(page, browser)
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -111,112 +227,7 @@ def browser_snapshot():
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
-            title = page.title()
-            url = page.url
-
-            # Extract main content or spec highlights
-            main_text = ""
-            if "google.com/search" not in url:
-                try:
-                    body_txt = page.locator("body").inner_text()
-                    spec_paragraphs = []
-                    for p_chunk in body_txt.split("\n\n"):
-                        p_clean = p_chunk.strip().replace("\n", " ")
-                        if len(p_clean) > 25 and any(k in p_clean.lower() for k in [
-                            "hbm", "bandwidth", "flop", "tflops", "compute", "tdp", "memory", 
-                            "transistor", "ghz", "architecture", "cdna", "hopper", "cuda", "rocm", "specs", "benchmark"
-                        ]):
-                            spec_paragraphs.append(p_clean)
-                            if len("\n\n".join(spec_paragraphs)) > 1200:
-                                break
-                    if spec_paragraphs:
-                        main_text = "\n\n".join(spec_paragraphs)
-                except Exception:
-                    pass
-
-            if not main_text:
-                for selector in ['#rso', '[role="main"]', 'main', 'article', '#main', 'body']:
-                    loc = page.locator(selector).first
-                    try:
-                        if loc.count() > 0:
-                            txt = loc.inner_text(timeout=1000).strip()
-                            if len(txt) > 40:
-                                lines = [l.strip() for l in txt.split("\n") if l.strip()]
-                                clean_lines = [l for l in lines if l not in [
-                                    "Web results", "Search Results", "AI Mode", "All", 
-                                    "Images", "Shopping", "Videos", "News", "Forums", "More", "Tools"
-                                ]]
-                                main_text = "\n".join(clean_lines)
-                                break
-                    except Exception:
-                        pass
-
-            # Structured search results extraction (Google / DuckDuckGo / Bing cards)
-            search_cards = []
-            try:
-                card_data = page.evaluate("""() => {
-                    const cards = [];
-                    // Google search cards
-                    const gCards = document.querySelectorAll('#rso .g');
-                    for (const el of gCards) {
-                        const h = el.querySelector('h3');
-                        const a = el.querySelector('a[href]');
-                        const txt = (el.innerText || '').trim();
-                        if (h && txt) {
-                            cards.push({
-                                title: h.innerText.trim(),
-                                snippet: txt.slice(0, 300).replace(/\\n+/g, ' ')
-                            });
-                        }
-                    }
-                    return cards.slice(0, 5);
-                }""")
-                if card_data:
-                    search_cards = card_data
-            except Exception:
-                pass
-
-            # Key interactive elements
-            interactive_items = []
-            try:
-                interactive_items = page.evaluate("""() => {
-                    const items = [];
-                    const els = document.querySelectorAll('h1, h2, h3, a[href], button');
-                    const seen = new Set();
-                    for (const el of els) {
-                        const txt = (el.innerText || el.textContent || '').trim();
-                        if (txt && txt.length > 2 && !seen.has(txt)) {
-                            seen.add(txt);
-                            const tag = el.tagName.toLowerCase();
-                            const role = el.getAttribute('role') || (tag.startsWith('h') ? 'heading' : (tag === 'a' ? 'link' : tag));
-                            items.push({
-                                role: role,
-                                name: txt.slice(0, 80)
-                            });
-                            if (items.length >= 20) break;
-                        }
-                    }
-                    return items;
-                }""")
-            except Exception:
-                pass
-
-            browser.close()
-
-            # Also include desktop windows context
-            desktop_wins = get_desktop_windows()
-
-            return {
-                "browser_context": {
-                    "role": "WebArea",
-                    "title": title,
-                    "url": url,
-                    "content_summary": main_text[:1400] if main_text else "",
-                    "search_results": search_cards if search_cards else None,
-                    "elements": interactive_items[:15]
-                },
-                "desktop_context": desktop_wins
-            }
+            return _extract_page_snapshot(page, browser)
     except Exception as e:
         return {
             "browser_context": {"status": f"CDP Offline: {str(e)}"},
@@ -225,9 +236,8 @@ def browser_snapshot():
 
 
 def browser_click(target: str):
-    """Clicks an element by role, text, or selector using Playwright with fuzzy matching."""
+    """Clicks an element by role, text, or selector, and returns the updated page snapshot."""
     try:
-        import re
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
@@ -286,8 +296,8 @@ def browser_click(target: str):
                 except Exception:
                     pass
                 time.sleep(0.5)
-                browser.close()
-                return {"success": True, "action": "click", "target": target}
+                # Return live snapshot of the new page right away!
+                return _extract_page_snapshot(page, browser)
 
             browser.close()
             return {"success": False, "error": f"Element '{target}' not found: {str(last_err)}"}
@@ -296,7 +306,7 @@ def browser_click(target: str):
 
 
 def browser_type(target: str, text: str, press_enter: bool = False):
-    """Types text into an element using Playwright."""
+    """Types text into an element using Playwright and returns updated page snapshot."""
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -317,30 +327,35 @@ def browser_type(target: str, text: str, press_enter: bool = False):
                         loc.fill(text, timeout=3000)
                         if press_enter:
                             loc.press("Enter")
+                            try:
+                                page.wait_for_load_state("domcontentloaded", timeout=4000)
+                            except Exception:
+                                pass
+                            time.sleep(0.5)
                         typed = True
                         break
                 except Exception as e:
                     last_err = e
 
-            browser.close()
             if typed:
-                return {"success": True, "action": "type", "text": text, "enter": press_enter}
+                return _extract_page_snapshot(page, browser)
+
+            browser.close()
             return {"success": False, "error": f"Target '{target}' not found for typing: {str(last_err)}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def browser_scroll(direction: str = "down", amount: int = 500):
-    """Scrolls webpage using Playwright."""
+    """Scrolls webpage using Playwright and returns newly visible page snapshot."""
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
             delta = amount if direction == "down" else -amount
             page.evaluate(f"window.scrollBy(0, {delta})")
-            time.sleep(0.3)
-            browser.close()
-            return {"success": True, "action": "scroll", "direction": direction, "amount": amount}
+            time.sleep(0.4)
+            return _extract_page_snapshot(page, browser)
     except Exception as e:
         return {"success": False, "error": str(e)}
 

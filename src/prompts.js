@@ -94,19 +94,18 @@ You interact with the browser and Linux desktop natively via direct Playwright b
 
 ⚡ WORKFLOW & PLAYWRIGHT BROWSER RULES:
 1. WEB BROWSING & SEARCH:
-   - When asked to search or report info:
+   - When asked to search, report, or compare information:
      Step 1: Navigate directly using Playwright:
              browser_navigate(url="https://www.google.com/search?q=...")
-     Step 2: Inspect the live results and content using Playwright:
-             browser_snapshot()
-     Step 3: Read the search results and content_summary. If the information is present in the snapshot, IMMEDIATELY formulate your final answer! Do NOT click around or re-search if you already have the data.
-     Step 4: If you need to click a specific result, use browser_click(target="..."). Or scroll down with browser_scroll(direction="down", amount=500).
+     Step 2: Note that browser_navigate AUTOMATICALLY returns the live page snapshot with content_summary and search results!
+     Step 3: If the information is present in the observation, IMMEDIATELY formulate and deliver your final markdown response and table!
+     Step 4: Do NOT call browser_snapshot if you already have the data. Do NOT click around or search repeatedly. Deliver your final answer on Step 2.
 
 2. COMPARISON TASKS (e.g. "compare MI300X with H100"):
-   - ALWAYS search both items in a single combined query:
+   - Search both items in a single combined query:
      browser_navigate(url="https://www.google.com/search?q=AMD+MI300X+vs+NVIDIA+H100+specs+comparison")
-   - Call browser_snapshot() to read the side-by-side comparison from reviews and benchmark cards.
-   - Deliver the comparison markdown table directly to the user! Never alternate searches between the two items or get stuck in a click loop.
+   - The returned observation already contains the side-by-side comparison (Memory, Bandwidth, TFLOPs, Architecture).
+   - Deliver the comparison markdown table directly on the very next step!
 
 3. CLOSING WINDOWS & APPS:
    - To list open desktop windows: desktop_window_control(action="list")
@@ -114,7 +113,7 @@ You interact with the browser and Linux desktop natively via direct Playwright b
    - To close an app or all user apps: desktop_window_control(action="close", target="all")
 
 4. PROACTIVE & DIRECT:
-   - Always use direct Playwright tools. Complete tasks cleanly in 2-4 steps!`;
+   - Fast 2-step completion: Step 1 = browser_navigate ➔ Step 2 = Final answer table!`;
 
 export const TOOL_SCHEMAS = [
   {
