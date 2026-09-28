@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-native_cua_engine.py — Native Linux CUA Master Engine v1.0
+native_cua_engine.py — High-Performance Native Linux CUA Engine v2.0
 Combines:
-1. Chromium Accessibility Tree via Playwright / CDP (page.accessibility.snapshot pruned)
-2. Native Linux Desktop Accessibility Tree via AT-SPI2 / PyGObject
-3. Functional Semantic Selectors (get_by_role, click, fill) + Native Fallback
+1. Playwright CDP Browser Extraction (ARIA Snapshots + Main Content Text Extraction)
+2. Direct Playwright Functional Actions (click, fill, goto, scroll)
+3. Native Linux Desktop AT-SPI2 / PyGObject Integration
 """
 
 import sys
@@ -56,94 +56,72 @@ class NativeCUAEngine:
         return json.dumps(state, indent=2)
 
     def _get_browser_tree(self) -> dict:
-        """Extracts and clean-filters Chromium Accessibility layout nodes."""
-        # Try Playwright first if installed
+        """Extracts and clean-filters Chromium Accessibility layout nodes using Playwright."""
         try:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(self.cdp_url, timeout=3000)
                 contexts = browser.contexts
                 if not contexts or not contexts[0].pages:
+                    browser.close()
                     return {"status": "No active browser tabs opened"}
                 
                 page = contexts[0].pages[0]
-                raw_tree = page.accessibility.snapshot()
-                browser.close()
-                return self._prune_node(raw_tree)
-        except Exception as pw_err:
-            # Fallback to direct CDP WebSocket / HTTP evaluation
-            try:
-                import urllib.request
-                import websocket
-                tabs = json.loads(urllib.request.urlopen(f"{self.cdp_url}/json", timeout=1.5).read().decode('utf-8'))
-                page_tabs = [t for t in tabs if t.get('type') == 'page']
-                if not page_tabs:
-                    return {"status": "No active browser tabs opened"}
+                title = page.title()
+                url = page.url
                 
-                ws_url = page_tabs[0]["webSocketDebuggerUrl"]
-                ws = websocket.create_connection(ws_url, timeout=2)
-                # Request Accessibility.getFullAXTree or evaluate compact DOM representation
-                js_code = """
-                (function() {
-                    var items = [];
-                    var title = document.title;
-                    if (title) items.push({role: "heading", name: title, value: title});
-                    var elements = document.querySelectorAll('h1, h2, h3, h4, p, button, a, input, select, textarea, [role="button"], [role="link"], [role="heading"], [role="textbox"]');
-                    var seen = new Set();
-                    for (var el of elements) {
-                        var txt = (el.innerText || el.textContent || el.value || el.placeholder || "").trim();
-                        if (txt && txt.length >= 2 && !seen.has(txt)) {
-                            seen.add(txt);
-                            var role = el.getAttribute('role') || el.tagName.toLowerCase();
-                            if (role === 'a') role = 'link';
-                            if (role === 'input') role = el.type === 'button' || el.type === 'submit' ? 'button' : 'textbox';
-                            items.push({
-                                role: role,
-                                name: txt.slice(0, 100),
-                                value: el.value || undefined,
-                                focused: document.activeElement === el ? true : undefined
-                            });
-                            if (items.length >= 35) break;
+                # Extract main content text
+                main_text = ""
+                for selector in ['#main', '#rso', '[role="main"]', 'article', 'main', 'body']:
+                    loc = page.locator(selector).first
+                    try:
+                        if loc.count() > 0:
+                            txt = loc.inner_text(timeout=1000).strip()
+                            if len(txt) > 50:
+                                main_text = txt
+                                break
+                    except Exception:
+                        pass
+                
+                # Extract key interactive elements (links, headings, buttons)
+                interactive_items = []
+                try:
+                    js_code = """
+                    (function() {
+                        var items = [];
+                        var els = document.querySelectorAll('h1, h2, h3, h4, [role="heading"], a[href], button, input, [role="button"]');
+                        var seen = new Set();
+                        for (var el of els) {
+                            var txt = (el.innerText || el.textContent || el.value || "").trim();
+                            if (txt && txt.length > 2 && !seen.has(txt)) {
+                                seen.add(txt);
+                                var tag = el.tagName.toLowerCase();
+                                var role = el.getAttribute('role') || (tag.startsWith('h') ? 'heading' : (tag === 'a' ? 'link' : tag));
+                                items.push({
+                                    role: role,
+                                    name: txt.slice(0, 100),
+                                    value: el.value || undefined
+                                });
+                                if (items.length >= 35) break;
+                            }
                         }
-                    }
-                    return items;
-                })()
-                """
-                ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": js_code, "returnByValue": True}}))
-                res = json.loads(ws.recv())
-                ws.close()
-                items = res.get("result", {}).get("result", {}).get("value", [])
-                if isinstance(items, list):
-                    return {"role": "WebArea", "name": page_tabs[0].get("title", "Web Page"), "children": items}
-            except Exception as cdp_err:
-                pass
-            return {"status": f"Browser CDP offline ({str(pw_err)})"}
+                        return items;
+                    })()
+                    """
+                    interactive_items = page.evaluate(js_code)
+                except Exception:
+                    pass
 
-    def _prune_node(self, node: dict) -> dict:
-        """Recursively removes layout bloat to keep tokens incredibly small."""
-        if not node:
-            return {}
-        
-        pruned = {
-            "role": node.get("role"),
-            "name": (node.get("name") or "").strip()
-        }
-        
-        if "value" in node and node["value"]:
-            pruned["value"] = node["value"]
-        if node.get("focused"):
-            pruned["focused"] = True
-            
-        if "children" in node:
-            valid_children = []
-            for child in node["children"]:
-                clean_child = self._prune_node(child)
-                if clean_child and (clean_child.get("name") or clean_child.get("children") or clean_child.get("value")):
-                    valid_children.append(clean_child)
-            if valid_children:
-                pruned["children"] = valid_children
-                
-        return pruned
+                browser.close()
+                return {
+                    "role": "WebArea",
+                    "title": title,
+                    "url": url,
+                    "content_summary": main_text[:1200] if main_text else "",
+                    "elements": interactive_items[:30]
+                }
+        except Exception as e:
+            return {"status": f"Browser CDP offline: {str(e)}"}
 
     def _get_desktop_tree(self) -> list:
         """Queries Linux D-Bus registry for system windows outside of Chromium."""
@@ -214,34 +192,34 @@ class NativeCUAEngine:
         for i in range(min(cc, 20)):
             self._traverse_atspi(node.get_child_at_index(i), element_list, depth + 1, max_depth)
 
-    def execute_browser_action(self, action: str, role: str, name: str, value: str = None):
-        """Executes a browser interaction strictly via functional selectors."""
+    def execute_browser_action(self, action: str, role: str = None, name: str = None, value: str = None, url: str = None):
+        """Executes a browser interaction strictly via Playwright functional selectors."""
         try:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(self.cdp_url)
                 page = browser.contexts[0].pages[0]
-                locator = page.get_by_role(role, name=name)
                 
-                if action == "click":
-                    locator.click()
-                elif action == "type" or action == "fill":
-                    locator.fill(value or "")
+                if action == "goto" and url:
+                    page.goto(url, timeout=10000)
+                elif action == "click" and role and name:
+                    page.get_by_role(role, name=name).click(timeout=5000)
+                elif action in ["type", "fill"] and role and name:
+                    page.get_by_role(role, name=name).fill(value or "", timeout=5000)
+                elif action == "scroll":
+                    page.evaluate(f"window.scrollBy(0, {value or 500})")
+                
                 browser.close()
                 return {"success": True}
         except Exception as e:
-            # Fallback to coordinate or xdotool
             return {"success": False, "error": str(e)}
 
     def execute_desktop_click(self, x: int, y: int):
-        """Fallback system coordination click engine (runs natively inside Linux environment)."""
+        """Fallback system coordination click engine."""
         subprocess.run(["xdotool", "mousemove", str(x), str(y), "click", "1"], check=False)
         return {"success": True}
 
 
 if __name__ == "__main__":
     engine = NativeCUAEngine()
-    if len(sys.argv) > 1 and sys.argv[1] == "state":
-        print(engine.get_integrated_ui_state())
-    else:
-        print(engine.get_integrated_ui_state())
+    print(engine.get_integrated_ui_state())

@@ -97,11 +97,11 @@ You interact with the Linux desktop natively via Playwright CDP, AT-SPI2 accessi
 ⚡ WORKFLOW & BROWSER INTERACTION RULES:
 1. WEB BROWSING & SEARCH:
    - When asked to search or browse (e.g. "search for AMD MI300X specs"):
-     Step 1: Open the search URL with full CDP & clean profile flags:
-             run_command(command="google-chrome --no-sandbox --no-first-run --no-default-browser-check --disable-dev-shm-usage --password-store=basic --disable-session-crashed-bubble --noerrdialogs --hide-crash-restore-bubble --disable-infobars --user-data-dir=/tmp/chrome_profile --remote-debugging-port=9222 --remote-allow-origins=* 'https://www.google.com/search?q=AMD+MI300X+specs' &")
+     Step 1: Open the search URL in background with full CDP flags:
+             run_command(command="nohup google-chrome --no-sandbox --no-first-run --no-default-browser-check --disable-dev-shm-usage --password-store=basic --disable-session-crashed-bubble --noerrdialogs --hide-crash-restore-bubble --disable-infobars --user-data-dir=/tmp/chrome_profile --remote-debugging-port=9222 --remote-allow-origins=* 'https://www.google.com/search?q=AMD+MI300X+specs' > /dev/null 2>&1 &")
      Step 2: Scroll down to reveal content on screen:
              mouse_scroll(amount=6, direction="down")
-     Step 3: Read screen elements using read_screen_tree to perceive the live page headings, results, and text.
+     Step 3: Read screen elements using read_screen_tree to perceive the live page headings, content summary, and specs.
      Step 4: Deliver your final response with a complete markdown summary table of the search findings. Do NOT loop calling read_screen_tree repeatedly.
 
 2. CLOSING WINDOWS & APPS:

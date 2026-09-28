@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 const SCRIPT_DIR = resolve(process.cwd(), "src");
 const SEMANTIC_DESKTOP_PY = resolve(SCRIPT_DIR, "semantic_desktop.py");
 const BROWSER_CDP_PY = resolve(SCRIPT_DIR, "browser_cdp.py");
+const NATIVE_CUA_ENGINE_PY = resolve(SCRIPT_DIR, "native_cua_engine.py");
 const DAEMON_SOCK = "/tmp/swades_cua.sock";
 
 let daemonProcess = null;
@@ -494,7 +495,8 @@ async function withEnvironmentFeedback(actionPromise) {
 export async function executeCuaTool(name, args = {}) {
   switch (name) {
     case "read_screen_tree":
-      return await runSemantic(args.target ? `dump "${args.target.replace(/"/g, '\\"')}"` : "dump");
+      const nativeOut = await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}"`);
+      return nativeOut || (await runSemantic("dump"));
 
     case "list_open_windows":
       return await runSemantic("list_windows");
