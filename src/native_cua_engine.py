@@ -729,16 +729,35 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
     }
     """
 
-    res = page.evaluate(js_multi_tier_type, [index, text_target, text, clear, submit])
+    res = {}
+    for _ in range(4):
+        try:
+            res = page.evaluate(js_multi_tier_type, [index, text_target, text, clear, submit])
+            if res.get("success"):
+                break
+        except Exception:
+            time.sleep(0.25)
 
     # Tier 3: Hardware keyboard events & Enter submission
     if res.get("success"):
+        cx = res.get("center_x")
+        cy = res.get("center_y")
+        if cx and cy and cx > 0 and cy > 0:
+            try:
+                page.mouse.click(cx, cy)
+                if clear:
+                    page.keyboard.press("Control+A")
+                    page.keyboard.press("Backspace")
+                page.keyboard.type(text)
+            except Exception:
+                pass
+
         if submit:
             try:
                 page.keyboard.press("Enter")
             except Exception:
                 pass
-        return {"success": True, "tier_dispatch": "Multi-tier Type + Events", "target": target, "text": text}
+        return {"success": True, "tier_dispatch": "Multi-tier Type + Events + Keyboard", "target": target, "text": text}
 
     # Fallback to Playwright locator
     if index is not None:
