@@ -327,15 +327,8 @@ INDEX_DOM_SCRIPT = """
 """
 
 def _ensure_indexed(page):
-    """Ensures that elements in the active page have data-swades-id attributes freshly assigned."""
-    try:
-        page.evaluate(INDEX_DOM_SCRIPT)
-    except Exception:
-        time.sleep(0.2)
-        try:
-            page.evaluate(INDEX_DOM_SCRIPT)
-        except Exception:
-            pass
+    """Ensures that elements in the active page have data-swades-id attributes freshly assigned via compact_dom.js."""
+    return safe_eval_compact_dom(page)
 
 
 def _build_compact_dom_representation(elements):
@@ -534,9 +527,16 @@ def _dispatch_click(page, target):
                     break;
                 }
             }
-            if (!el) {
-                try { el = document.querySelector(txt); } catch(_) {}
-            }
+        if (!el && idx !== null && idx !== undefined) {
+            const allInteractives = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], div[class*="btn"], div[class*="button"], span[class*="btn"], span[class*="button"]')).filter(e => {
+                const r = e.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            });
+            if (allInteractives[idx]) el = allInteractives[idx];
+        }
+
+        if (!el && txt) {
+            try { el = document.querySelector(txt); } catch(_) {}
         }
 
         if (!el) return { success: false, error: 'Element not found in DOM' };
