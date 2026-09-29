@@ -128,24 +128,36 @@ def get_playwright_page(p):
 
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     
-    target_page = None
+    best_page = None
+    best_score = -1
+
     for pg in context.pages:
-        if pg.url and not pg.url.startswith("chrome://") and not pg.url.startswith("about:"):
-            try:
-                txt = pg.locator("body").inner_text(timeout=300).strip()
-                if len(txt) > 20 or pg.title():
-                    target_page = pg
-                    break
-            except Exception:
-                pass
-    
-    if not target_page:
+        url = pg.url or ""
+        if url.startswith(("chrome://", "devtools://", "chrome-extension://")):
+            continue
+        try:
+            title = pg.title() or ""
+            # Filter obvious ad/sync pixels
+            if any(bad in title.lower() for bad in ["sync pixel", "tracker", "ad banner", "about:blank"]):
+                continue
+            
+            # Score by button/input density and viewport
+            btn_count = pg.locator("button, input, a, select").count()
+            score = btn_count * 10 + (100 if "richup" in url.lower() or "google" in url.lower() else 0)
+            if score > best_score:
+                best_score = score
+                best_page = pg
+        except Exception:
+            continue
+
+    if not best_page:
         for pg in context.pages:
-            if pg.url and not pg.url.startswith("chrome://") and not pg.url.startswith("about:"):
-                target_page = pg
+            url = pg.url or ""
+            if url and not url.startswith("chrome://") and not url.startswith("about:"):
+                best_page = pg
                 break
-    if not target_page:
-        target_page = context.pages[0] if context.pages else context.new_page()
+
+    target_page = best_page or (context.pages[0] if context.pages else context.new_page())
 
     try:
         target_page.bring_to_front()
