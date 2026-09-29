@@ -128,22 +128,30 @@ def get_playwright_page(p):
 
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     
+    AD_HOST_BLACKLIST = [
+        "doubleclick.net", "googlesyndication.com", "safeframe", "google.com/recaptcha",
+        "challenges.cloudflare.com", "adnxs.com", "rubiconproject.com", "criteo.com",
+        "adagio.js", "sync pixels", "amazon-adsystem.com", "taboola.com", "outbrain.com",
+        "partnerpixels", "google-analytics.com", "4dex.io", "quantserve.com", "scorecardresearch.com"
+    ]
+
     best_page = None
     best_score = -1
 
     for pg in context.pages:
-        url = pg.url or ""
-        if url.startswith(("chrome://", "devtools://", "chrome-extension://")):
+        url = (pg.url or "").lower()
+        if not url or url.startswith(("chrome://", "devtools://", "chrome-extension://", "about:blank")):
+            continue
+        if any(ad in url for ad in AD_HOST_BLACKLIST):
             continue
         try:
-            title = pg.title() or ""
-            # Filter obvious ad/sync pixels
-            if any(bad in title.lower() for bad in ["sync pixel", "tracker", "ad banner", "about:blank"]):
+            title = (pg.title() or "").lower()
+            if any(ad in title for ad in ["sync pixel", "tracker", "ad banner", "checking your browser", "adagio"]):
                 continue
             
-            # Score by button/input density and viewport
-            btn_count = pg.locator("button, input, a, select").count()
-            score = btn_count * 10 + (100 if "richup" in url.lower() or "google" in url.lower() else 0)
+            score = 100
+            if "richup" in url or "google" in url or "github" in url or "wikipedia" in url:
+                score += 500
             if score > best_score:
                 best_score = score
                 best_page = pg
@@ -152,8 +160,8 @@ def get_playwright_page(p):
 
     if not best_page:
         for pg in context.pages:
-            url = pg.url or ""
-            if url and not url.startswith("chrome://") and not url.startswith("about:"):
+            url = (pg.url or "").lower()
+            if url and not url.startswith(("chrome://", "about:")) and not any(ad in url for ad in AD_HOST_BLACKLIST):
                 best_page = pg
                 break
 
@@ -381,7 +389,7 @@ def _build_compact_dom_representation(elements):
 
 
 def safe_eval_compact_dom(page):
-    """Executes compact_dom.js with automatic retry, load state sync, and fallback to direct DOM indexing."""
+    """Executes compact_dom.js with automatic retry and load state synchronization."""
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compact_dom.js")
     try:
         with open(script_path, "r", encoding="utf-8") as f:
@@ -389,28 +397,21 @@ def safe_eval_compact_dom(page):
     except Exception:
         js_code = ""
 
-    for attempt in range(3):
+    # Strip ES module export keyword for raw browser script evaluation
+    clean_js = re.sub(r'export\s+\{[^}]+\};?', '', js_code)
+
+    for attempt in range(5):
         try:
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=2000)
+                page.wait_for_load_state("domcontentloaded", timeout=2500)
             except Exception:
                 pass
-            if js_code:
-                res = page.evaluate(f"() => {{\n{js_code}\nreturn getCompactDom();\n}}")
-                if res and isinstance(res, dict) and res.get("elements"):
+            if clean_js:
+                res = page.evaluate(f"() => {{\n{clean_js}\nreturn getCompactDom();\n}}")
+                if res and isinstance(res, dict) and "elements" in res and res["elements"]:
                     return res
         except Exception:
-            time.sleep(0.2)
-
-    # Robust In-Page Fallback
-    try:
-        elements = page.evaluate(INDEX_DOM_SCRIPT)
-        if elements:
-            dsl = _build_compact_dom_representation(elements)
-            return {"elements": elements, "dsl": dsl}
-    except Exception:
-        pass
-
+            time.sleep(0.35)
     return {"elements": [], "dsl": ""}
 
 
@@ -656,26 +657,21 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
         if (idx !== null && idx !== undefined) {
             el = document.querySelector(`[data-swades-id="${idx}"]`);
         }
-        
-        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]')).filter(i => {
-            const r = i.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        });
-
-        if (!el && txt) {
-            const cleanTxt = txt.toLowerCase().trim();
-            el = inputs.find(i => 
-                (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
-                (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
-                (i.name || '').toLowerCase().includes(cleanTxt) ||
-                (i.value || '').toLowerCase().includes(cleanTxt)
-            );
-        }
-
-        if (!el && inputs.length > 0) {
-            if (idx !== null && idx !== undefined && inputs[idx]) {
-                el = inputs[idx];
-            } else {
+        if (!el) {
+            const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]')).filter(i => {
+                const r = i.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            });
+            if (txt) {
+                const cleanTxt = txt.toLowerCase().trim();
+                el = inputs.find(i => 
+                    (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
+                    (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
+                    (i.name || '').toLowerCase().includes(cleanTxt) ||
+                    (i.value || '').toLowerCase().includes(cleanTxt)
+                );
+            }
+            if (!el && inputs.length > 0) {
                 el = inputs[0];
             }
         }
@@ -734,35 +730,16 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
     }
     """
 
-    res = {}
-    for _ in range(4):
-        try:
-            res = page.evaluate(js_multi_tier_type, [index, text_target, text, clear, submit])
-            if res.get("success"):
-                break
-        except Exception:
-            time.sleep(0.25)
+    res = page.evaluate(js_multi_tier_type, [index, text_target, text, clear, submit])
 
     # Tier 3: Hardware keyboard events & Enter submission
     if res.get("success"):
-        cx = res.get("center_x")
-        cy = res.get("center_y")
-        if cx and cy and cx > 0 and cy > 0:
-            try:
-                page.mouse.click(cx, cy)
-                if clear:
-                    page.keyboard.press("Control+A")
-                    page.keyboard.press("Backspace")
-                page.keyboard.type(text)
-            except Exception:
-                pass
-
         if submit:
             try:
                 page.keyboard.press("Enter")
             except Exception:
                 pass
-        return {"success": True, "tier_dispatch": "Multi-tier Type + Events + Keyboard", "target": target, "text": text}
+        return {"success": True, "tier_dispatch": "Multi-tier Type + Events", "target": target, "text": text}
 
     # Fallback to Playwright locator
     if index is not None:
