@@ -43,7 +43,7 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "browser_navigate",
-      description: "Navigate the web browser directly to a URL using Playwright. Launches browser on desktop display automatically if not already running.",
+      description: "Navigate the web browser directly to a URL using Playwright. Automatically returns the updated compact indexed DOM snapshot ([@0], [@1], ...).",
       parameters: {
         type: "object",
         properties: {
@@ -57,7 +57,7 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "browser_snapshot",
-      description: "Inspect the live webpage using Playwright. Returns page title, URL, structured search result cards, main content text summary, and clickable interactive elements.",
+      description: "Inspect the live webpage using Playwright. Returns compact indexed DOM ([@0], [@1], ...), page title, URL, search result cards, main content text summary, and element attributes.",
       parameters: {
         type: "object",
         properties: {},
@@ -69,13 +69,13 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "browser_click",
-      description: "Click a button, link, or element on the current webpage by text name, role, or selector using Playwright.",
+      description: "Click a button, link, or interactive element on the current webpage by its closed-world index from the compact DOM (e.g. 0 for [@0]). Executes multi-tier dispatch (DOM click -> synthetic events -> CDP coordinate click) and automatically returns the updated observation.",
       parameters: {
         type: "object",
         properties: {
-          target: { type: "string", description: "Visible text, role, or CSS selector of the button/link to click" }
+          index: { type: "integer", description: "The integer index of the element to click (e.g. 0 for [@0], 1 for [@1])" }
         },
-        required: ["target"]
+        required: ["index"]
       }
     }
   },
@@ -83,15 +83,31 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "browser_type",
-      description: "Type text into an input field or search bar on the webpage using Playwright.",
+      description: "Type text into an input field or textarea by its closed-world index from the compact DOM (e.g. 1 for [@1]). Supports clearing previous text and pressing Enter to submit.",
       parameters: {
         type: "object",
         properties: {
-          target: { type: "string", description: "Placeholder, label, role, or selector of the input field" },
+          index: { type: "integer", description: "The integer index of the input element (e.g. 1 for [@1])" },
           text: { type: "string", description: "Text content to type" },
-          press_enter: { type: "boolean", description: "Whether to hit Enter after typing (default false)" }
+          clear: { type: "boolean", description: "Whether to clear existing text before typing (default true)" },
+          submit: { type: "boolean", description: "Whether to submit the form or press Enter after typing (default false)" }
         },
-        required: ["target", "text"]
+        required: ["index", "text"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "browser_select",
+      description: "Select an option from a dropdown (<select>) element by its closed-world index from the compact DOM (e.g. 2 for [@2]). Automatically returns updated observation.",
+      parameters: {
+        type: "object",
+        properties: {
+          index: { type: "integer", description: "The integer index of the select element (e.g. 2 for [@2])" },
+          value: { type: "string", description: "The option text or value to select" }
+        },
+        required: ["index", "value"]
       }
     }
   },
@@ -99,14 +115,28 @@ export const CUA_TOOL_SCHEMAS = [
     type: "function",
     function: {
       name: "browser_scroll",
-      description: "Scroll the webpage smoothly up or down using Playwright.",
+      description: "Scroll the webpage smoothly up or down. Automatically returns the newly visible compact indexed DOM snapshot.",
       parameters: {
         type: "object",
         properties: {
-          direction: { type: "string", enum: ["up", "down"], description: "Scroll direction (default 'down')" },
+          direction: { type: "string", enum: ["up", "down", "left", "right"], description: "Scroll direction (default 'down')" },
           amount: { type: "integer", description: "Pixels to scroll (default 500)" }
         },
         required: ["direction"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "browser_wait",
+      description: "Wait for a specified number of seconds to let dynamic page content or SPA animations settle, and return a fresh compact indexed snapshot.",
+      parameters: {
+        type: "object",
+        properties: {
+          seconds: { type: "number", description: "Number of seconds to wait (default 1.0)" }
+        },
+        required: ["seconds"]
       }
     }
   },
@@ -210,7 +240,9 @@ export const CUA_MINIMAL_TOOL_SCHEMAS = [
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "browser_snapshot"),
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "browser_click"),
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "browser_type"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "browser_select"),
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "browser_scroll"),
+  CUA_TOOL_SCHEMAS.find(t => t.function.name === "browser_wait"),
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "desktop_window_control"),
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "desktop_interact"),
   CUA_TOOL_SCHEMAS.find(t => t.function.name === "run_command")
@@ -221,64 +253,86 @@ export async function executeCuaTool(name, args = {}) {
     case "browser_navigate":
     case "open_browser_url": {
       const url = args.url || "https://google.com";
-      return await runNativeCua(["navigate", url]);
+      const payload = JSON.stringify({ action: "navigate", url });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "browser_snapshot":
     case "read_screen_tree": {
-      return await runNativeCua(["snapshot"]);
+      const payload = JSON.stringify({ action: "snapshot" });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "browser_click": {
-      const target = args.target || "";
-      return await runNativeCua(["click", target]);
+      const index = args.index !== undefined ? args.index : (args.target !== undefined ? args.target : 0);
+      const payload = JSON.stringify({ action: "click", index });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "browser_type": {
-      const target = args.target || "";
+      const index = args.index !== undefined ? args.index : (args.target !== undefined ? args.target : 0);
       const text = args.text || "";
-      const enterFlag = args.press_enter ? ["--enter"] : [];
-      return await runNativeCua(["type", target, text, ...enterFlag]);
+      const clear = args.clear !== undefined ? Boolean(args.clear) : true;
+      const submit = Boolean(args.submit || args.press_enter);
+      const payload = JSON.stringify({ action: "type", index, text, clear, submit });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
+    }
+
+    case "browser_select": {
+      const index = args.index !== undefined ? args.index : (args.target !== undefined ? args.target : 0);
+      const value = args.value || "";
+      const payload = JSON.stringify({ action: "select", index, value });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "browser_scroll":
     case "mouse_scroll": {
-      const dir = args.direction || "down";
-      const amt = String(args.amount || 500);
-      return await runNativeCua(["scroll", dir, amt]);
+      const direction = args.direction || "down";
+      const amount = Number(args.amount || 500);
+      const payload = JSON.stringify({ action: "scroll", direction, amount });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
+    }
+
+    case "browser_wait": {
+      const seconds = Number(args.seconds || 1.0);
+      const payload = JSON.stringify({ action: "wait", seconds });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "desktop_window_control": {
-      const act = args.action || "list";
+      const action = args.action || "list";
       const target = args.target || "";
-      return await runNativeCua(["windows", act, target]);
+      const payload = JSON.stringify({ action: "windows", target_action: action, action_type: action, action, target });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "list_open_windows": {
-      return await runNativeCua(["windows", "list"]);
+      const payload = JSON.stringify({ action: "windows", action_type: "list" });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "window_control": {
-      const act = args.action || "close";
+      const action = args.action || "close";
       const target = args.title || "";
-      return await runNativeCua(["windows", act, target]);
+      const payload = JSON.stringify({ action: "windows", action_type: action, action, target });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "desktop_interact": {
-      const act = args.action || "click";
-      if (act === "click") {
-        return await runNativeCua(["interact", "click", String(args.x || 0), String(args.y || 0)]);
-      }
-      return await runNativeCua(["interact", act, String(args.keys || "")]);
+      const action = args.action || "click";
+      const payload = JSON.stringify({ action: "interact", action_type: action, x: args.x, y: args.y, keys: args.keys });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "mouse_click": {
-      return await runNativeCua(["interact", "click", String(args.x || 0), String(args.y || 0)]);
+      const payload = JSON.stringify({ action: "interact", action_type: "click", x: args.x || 0, y: args.y || 0 });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "type_keys": {
-      const act = args.is_shortcut ? "key" : "type";
-      return await runNativeCua(["interact", act, String(args.keys || "")]);
+      const action_type = args.is_shortcut ? "key" : "type";
+      const payload = JSON.stringify({ action: "interact", action_type, keys: args.keys || "" });
+      return await runCommand(`python3 "${NATIVE_CUA_ENGINE_PY}" --json '${payload.replace(/'/g, "'\\''")}'`);
     }
 
     case "run_command":

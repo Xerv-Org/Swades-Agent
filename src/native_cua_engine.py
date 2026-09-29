@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """
-native_cua_engine.py — Unified Native Playwright & Desktop CUA Engine
-Every browser action (navigate, snapshot, click, scroll) returns the live page content!
+native_cua_engine.py — Unified Native Playwright & Desktop CUA Engine with Compact Indexed DOM
+Features:
+1. Closed-world compact indexed DOM representation ([@0], [@1], ...).
+2. Closed-world indexed tool actions:
+   - browser_click(index: int)
+   - browser_type(index: int, text: str, clear: bool = True, submit: bool = False)
+   - browser_select(index: int, value: str)
+   - browser_scroll(direction: str, amount: int = 500)
+   - browser_navigate(url: str)
+   - browser_wait(seconds: float)
+   - browser_snapshot()
+3. Multi-Tier Action Dispatch:
+   - Tier 1: Direct DOM click via [data-swades-id="<index>"]
+   - Tier 2: Synthetic framework event dispatcher (pointerdown, mousedown, focus, pointerup, mouseup, click)
+   - Tier 3: CDP coordinate click via Input.dispatchMouseEvent / Playwright mouse at exact center (x, y)
+4. Automatic Inline Observation Return:
+   - Every mutating tool call (click, type, select, navigate, scroll, wait) runs perception after 300-500ms settlement and returns updated compact DOM.
 """
 
 import sys
@@ -9,6 +24,8 @@ import os
 import re
 import json
 import time
+import shutil
+import glob
 import subprocess
 import urllib.request
 import warnings
@@ -31,21 +48,44 @@ ensure_env()
 CDP_PORT = 9222
 CDP_URL = f"http://127.0.0.1:{CDP_PORT}"
 
+def find_browser_binary(preference=None):
+    if preference:
+        p = shutil.which(preference)
+        if p: return p
+
+    candidates = [
+        "google-chrome", "google-chrome-stable", "google-chrome-unstable", "google-chrome-beta",
+        "chromium", "chromium-browser",
+        "brave-browser", "brave",
+        "microsoft-edge", "microsoft-edge-stable",
+        "vivaldi", "opera"
+    ]
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            return path
+
+    home = os.path.expanduser("~")
+    playwright_chromes = glob.glob(f"{home}/.cache/ms-playwright/chromium-*/chrome-linux*/chrome")
+    if playwright_chromes:
+        return sorted(playwright_chromes)[-1]
+
+    firefox_path = shutil.which("firefox")
+    if firefox_path:
+        return firefox_path
+
+    return None
+
+
 def ensure_chrome():
     """Ensure Google Chrome / Chromium is running with remote debugging port enabled."""
     try:
-        urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=0.8)
+        urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=0.6)
         return True
     except Exception:
         pass
 
-    chrome_bin = None
-    for b in ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"]:
-        res = subprocess.run(["which", b], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode == 0 and res.stdout.strip():
-            chrome_bin = res.stdout.strip()
-            break
-
+    chrome_bin = find_browser_binary()
     if not chrome_bin:
         return False
 
@@ -70,20 +110,24 @@ def ensure_chrome():
     
     for _ in range(25):
         try:
-            urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=0.4)
+            urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=0.3)
             return True
         except Exception:
-            time.sleep(0.15)
+            time.sleep(0.12)
     return False
 
 
 def get_playwright_page(p):
-    """Connects over CDP and returns the active page with real content."""
+    """Connects over CDP or launches Playwright Chromium and returns the active page."""
     ensure_chrome()
-    browser = p.chromium.connect_over_cdp(CDP_URL, timeout=4000)
+    browser = None
+    try:
+        browser = p.chromium.connect_over_cdp(CDP_URL, timeout=3000)
+    except Exception:
+        browser = p.chromium.launch(headless=False)
+
     context = browser.contexts[0] if browser.contexts else browser.new_context()
     
-    # Check all pages to find the one with real content
     target_page = None
     for pg in context.pages:
         if pg.url and not pg.url.startswith("chrome://") and not pg.url.startswith("about:"):
@@ -111,30 +155,243 @@ def get_playwright_page(p):
     return browser, target_page
 
 
-def _extract_page_snapshot(page, browser=None):
-    """Extracts structured content, search results, and interactive elements from active page."""
+# =====================================================================
+# Compact Indexed DOM Perception
+# =====================================================================
+
+INDEX_DOM_SCRIPT = """
+() => {
+    // 1. Clear any prior swades index markers
+    document.querySelectorAll('[data-swades-id]').forEach(el => el.removeAttribute('data-swades-id'));
+
+    const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        return true;
+    };
+
+    const isElementInViewport = (rect) => {
+        const vh = window.innerHeight || document.documentElement.clientHeight;
+        const vw = window.innerWidth || document.documentElement.clientWidth;
+        return (
+            rect.top < vh + 100 &&
+            rect.bottom > -100 &&
+            rect.left < vw + 100 &&
+            rect.right > -100
+        );
+    };
+
+    const selector = [
+        'button',
+        'a[href]',
+        'input',
+        'select',
+        'textarea',
+        '[role="button"]',
+        '[role="link"]',
+        '[role="checkbox"]',
+        '[role="radio"]',
+        '[role="combobox"]',
+        '[role="menuitem"]',
+        '[role="tab"]',
+        '[role="searchbox"]',
+        '[role="switch"]',
+        '[role="option"]',
+        '[tabindex="0"]',
+        'summary',
+        'details',
+        'h1, h2, h3',
+        '[onclick]'
+    ].join(', ');
+
+    const nodes = Array.from(document.querySelectorAll(selector));
+    const seen = new Set();
+    const elements = [];
+    let idx = 0;
+
+    for (const el of nodes) {
+        if (seen.has(el)) continue;
+        if (!isVisible(el)) continue;
+
+        const rect = el.getBoundingClientRect();
+        const tag = el.tagName.toLowerCase();
+        const roleAttr = (el.getAttribute('role') || '').toLowerCase();
+        const typeAttr = (el.getAttribute('type') || '').toLowerCase();
+
+        // Effective role
+        let role = roleAttr;
+        if (!role) {
+            if (tag.startsWith('h') && tag.length === 2) role = `heading:${tag}`;
+            else if (tag === 'a') role = 'link';
+            else if (tag === 'button' || typeAttr === 'button' || typeAttr === 'submit') role = 'button';
+            else if (tag === 'input') {
+                if (['checkbox', 'radio'].includes(typeAttr)) role = typeAttr;
+                else role = `input:${typeAttr || 'text'}`;
+            } else if (tag === 'select') role = 'select';
+            else if (tag === 'textarea') role = 'textarea';
+            else role = tag;
+        }
+
+        // Visible text / label
+        let label = '';
+        const ariaLabel = el.getAttribute('aria-label') || el.getAttribute('aria-placeholder') || el.getAttribute('title') || '';
+        const placeholder = el.getAttribute('placeholder') || '';
+        const innerTxt = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+
+        if (ariaLabel) {
+            label = ariaLabel;
+        } else if (placeholder && (!innerTxt || tag === 'input')) {
+            label = placeholder;
+        } else if (innerTxt) {
+            label = innerTxt.slice(0, 120);
+        } else if (el.value && tag === 'input') {
+            label = String(el.value).slice(0, 120);
+        }
+
+        let val = undefined;
+        if (tag === 'input' || tag === 'textarea') {
+            val = el.value || '';
+        } else if (tag === 'select') {
+            val = el.value || (el.options && el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '');
+        }
+
+        let options = undefined;
+        if (tag === 'select') {
+            options = Array.from(el.options || []).map(o => (o.text || o.value || '').trim()).filter(Boolean).slice(0, 25);
+        }
+
+        const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+        const checked = el.checked || el.getAttribute('aria-checked') === 'true';
+        const href = el.getAttribute('href') || undefined;
+
+        // Skip non-interactive items with empty labels (except inputs/selects/headings)
+        if (!label && !val && !href && !['select', 'input', 'textarea'].includes(tag) && !role.startsWith('heading')) {
+            continue;
+        }
+
+        el.setAttribute('data-swades-id', String(idx));
+        seen.add(el);
+
+        const bounds = {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            center_x: Math.round(rect.x + rect.width / 2),
+            center_y: Math.round(rect.y + rect.height / 2),
+            in_viewport: isElementInViewport(rect)
+        };
+
+        elements.push({
+            index: idx,
+            tag: tag,
+            role: role,
+            label: label ? label.slice(0, 120) : '',
+            value: val,
+            options: options,
+            href: href ? href.slice(0, 150) : undefined,
+            disabled: disabled || undefined,
+            checked: checked || undefined,
+            bounds: bounds
+        });
+
+        idx++;
+        if (idx >= 150) break;
+    }
+
+    return elements;
+}
+"""
+
+def _ensure_indexed(page):
+    """Ensures that elements in the active page have data-swades-id attributes assigned."""
     try:
-        # Check if page is in a dynamic loading transition (e.g. Richup / SPA "Loading game...")
+        has_index = page.evaluate("() => !!document.querySelector('[data-swades-id]')")
+        if not has_index:
+            page.evaluate(INDEX_DOM_SCRIPT)
+    except Exception:
+        try:
+            page.evaluate(INDEX_DOM_SCRIPT)
+        except Exception:
+            pass
+
+
+def _build_compact_dom_representation(elements):
+    """Formats the list of indexed elements into a clean, compact token-efficient string ([@0], [@1], ...)."""
+    lines = []
+    for el in elements:
+        idx = el.get("index", 0)
+        role = el.get("role", "element")
+        label = el.get("label", "").strip()
+        val = el.get("value")
+        options = el.get("options")
+        checked = el.get("checked")
+        disabled = el.get("disabled")
+        href = el.get("href")
+        bounds = el.get("bounds", {})
+        cx = bounds.get("center_x", 0)
+        cy = bounds.get("center_y", 0)
+        in_vp = bounds.get("in_viewport", True)
+
+        parts = [f"[@{idx}]", f"[{role}]"]
+
+        if label:
+            parts.append(f'"{label}"')
+        
+        if val is not None and val != "":
+            parts.append(f'value="{val}"')
+
+        if options:
+            opts_str = ", ".join([f'"{o}"' for o in options[:5]])
+            if len(options) > 5:
+                opts_str += f", ... (+{len(options)-5} more)"
+            parts.append(f"options=[{opts_str}]")
+
+        if checked is not None:
+            parts.append(f"checked={str(checked).lower()}")
+
+        if disabled:
+            parts.append("disabled")
+
+        if href and not label:
+            parts.append(f'href="{href}"')
+
+        loc_str = f"(center: {cx}, {cy})"
+        if not in_vp:
+            loc_str += " [offscreen]"
+        parts.append(loc_str)
+
+        lines.append(" ".join(parts))
+
+    return "\n".join(lines)
+
+
+def _extract_page_snapshot(page, browser=None):
+    """Extracts structured content, compact indexed DOM ([@0], [@1], ...), and interactive elements from active page."""
+    try:
         title = ""
-        url = page.url
-        for _ in range(10):
+        url = page.url or ""
+        for _ in range(8):
             try:
                 title = page.title()
-                raw_body = page.locator("body").inner_text(timeout=400).strip()
+                raw_body = page.locator("body").inner_text(timeout=300).strip()
                 if "loading game" in raw_body.lower() or len(raw_body) < 5 or not title:
-                    time.sleep(0.4)
+                    time.sleep(0.25)
                 else:
                     break
             except Exception:
-                time.sleep(0.3)
+                time.sleep(0.2)
 
-        url = page.url
+        url = page.url or ""
 
-        # Extract main content or spec highlights
+        # Extract main text / spec highlights
         main_text = ""
         if "google.com/search" not in url:
             try:
-                body_txt = page.locator("body").inner_text()
+                body_txt = page.locator("body").inner_text(timeout=1000)
                 spec_paragraphs = []
                 for p_chunk in body_txt.split("\n\n"):
                     p_clean = p_chunk.strip().replace("\n", " ")
@@ -158,7 +415,7 @@ def _extract_page_snapshot(page, browser=None):
                 loc = page.locator(selector).first
                 try:
                     if loc.count() > 0:
-                        txt = loc.inner_text(timeout=1000).strip()
+                        txt = loc.inner_text(timeout=500).strip()
                         if len(txt) > 40:
                             lines = [l.strip() for l in txt.split("\n") if l.strip()]
                             clean_lines = [l for l in lines if l not in [
@@ -170,52 +427,407 @@ def _extract_page_snapshot(page, browser=None):
                 except Exception:
                     pass
 
-        # Structured search results extraction (Google search cards)
+        # Structured search results extraction
         search_cards = []
         try:
-            js_cards = "() => Array.from(document.querySelectorAll('#rso .g')).map(el => ({ title: el.querySelector('h3')?.innerText?.trim() || '', snippet: (el.innerText || '').slice(0, 300) })).filter(c => c.title).slice(0, 5)"
+            js_cards = "() => Array.from(document.querySelectorAll('#rso .g, #rso div[data-hveid]')).map(el => ({ title: el.querySelector('h3')?.innerText?.trim() || '', snippet: (el.innerText || '').slice(0, 300) })).filter(c => c.title).slice(0, 6)"
             card_data = page.evaluate(js_cards)
             if card_data:
                 search_cards = card_data
         except Exception:
             pass
 
-        # Key interactive elements
-        interactive_items = []
-        for _ in range(5):
+        # Run DOM indexing script
+        elements = []
+        try:
+            elements = page.evaluate(INDEX_DOM_SCRIPT)
+        except Exception:
+            time.sleep(0.2)
             try:
-                js_items = "() => Array.from(document.querySelectorAll('h1, h2, h3, a[href], button, [role=\"button\"], input, select, [tabindex=\"0\"]')).map(el => ({ role: el.getAttribute('role') || (el.tagName.toLowerCase().startsWith('h') ? 'heading' : (el.tagName.toLowerCase() === 'a' ? 'link' : el.tagName.toLowerCase())), name: (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 80) })).filter(el => el.name.length >= 2).slice(0, 30)"
-                items = page.evaluate(js_items)
-                if items:
-                    interactive_items = items
-                    break
+                elements = page.evaluate(INDEX_DOM_SCRIPT)
             except Exception:
-                time.sleep(0.3)
+                elements = []
 
+        compact_dom = _build_compact_dom_representation(elements)
         desktop_wins = get_desktop_windows()
 
         return {
+            "success": True,
+            "compact_dom": compact_dom,
             "browser_context": {
                 "role": "WebArea",
                 "title": title or "Active Page",
                 "url": url,
+                "compact_dom": compact_dom,
                 "content_summary": main_text[:1400] if main_text else "",
                 "search_results": search_cards if search_cards else None,
-                "elements": interactive_items[:25]
+                "elements_count": len(elements),
+                "elements": elements
             },
             "desktop_context": desktop_wins
         }
     except Exception as e:
         return {
+            "success": False,
+            "error": str(e),
+            "compact_dom": "",
             "browser_context": {"status": f"CDP Offline: {str(e)}"},
             "desktop_context": get_desktop_windows()
         }
 
 
+# =====================================================================
+# Multi-Tier Action Dispatchers
+# =====================================================================
+
+def _parse_index_target(target):
+    """Extracts integer index from int, string index ('3', '[@3]'), or returns clean text target."""
+    if isinstance(target, int):
+        return target, None
+    s = str(target).strip()
+    match = re.search(r"^\[?@?(\d+)\]?$", s)
+    if match:
+        return int(match.group(1)), None
+    if s.isdigit():
+        return int(s), None
+    return None, s
+
+
+def _dispatch_click(page, target):
+    """
+    Multi-Tier Click Dispatcher:
+    Tier 1: Direct DOM click via [data-swades-id="<index>"]
+    Tier 2: Synthetic framework event dispatcher (pointerdown, mousedown, focus, pointerup, mouseup, click)
+    Tier 3: CDP coordinate click via Input.dispatchMouseEvent / Playwright mouse at exact center (x, y)
+    """
+    _ensure_indexed(page)
+    index, text_target = _parse_index_target(target)
+    
+    js_multi_tier_click = """
+    ([idx, txt]) => {
+        let el = null;
+        if (idx !== null && idx !== undefined) {
+            el = document.querySelector(`[data-swades-id="${idx}"]`);
+        }
+        if (!el && txt) {
+            const cleanTxt = txt.toLowerCase().replace(/['"™®©]/g, '').trim();
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex="0"], div, span, h1, h2, h3'));
+            for (const c of candidates) {
+                const cText = (c.innerText || c.textContent || c.value || c.getAttribute('aria-label') || '').trim().toLowerCase();
+                if (cText && (cText === cleanTxt || cText.includes(cleanTxt) || cleanTxt.includes(cText))) {
+                    el = c;
+                    break;
+                }
+            }
+            if (!el) {
+                try { el = document.querySelector(txt); } catch(_) {}
+            }
+        }
+
+        if (!el) return { success: false, error: 'Element not found in DOM' };
+
+        try {
+            el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        } catch (_) {}
+
+        const rect = el.getBoundingClientRect();
+        const cx = Math.round(rect.x + rect.width / 2);
+        const cy = Math.round(rect.y + rect.height / 2);
+
+        // Tier 1: Direct DOM click
+        let tier1_ok = false;
+        try {
+            if (typeof el.focus === 'function') el.focus();
+            if (typeof el.click === 'function') {
+                el.click();
+                tier1_ok = true;
+            }
+        } catch (e) {}
+
+        // Tier 2: Synthetic Framework Event Dispatcher
+        let tier2_ok = false;
+        try {
+            const evList = ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'focus', 'pointerup', 'mouseup', 'click'];
+            for (const name of evList) {
+                const isPtr = name.startsWith('pointer');
+                const EvClass = isPtr && window.PointerEvent ? PointerEvent : MouseEvent;
+                const ev = new EvClass(name, {
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                    view: window,
+                    clientX: cx,
+                    clientY: cy,
+                    screenX: cx,
+                    screenY: cy,
+                    button: 0,
+                    buttons: name.includes('down') ? 1 : 0
+                });
+                el.dispatchEvent(ev);
+            }
+            tier2_ok = true;
+        } catch (e) {}
+
+        return {
+            success: true,
+            tier1: tier1_ok,
+            tier2: tier2_ok,
+            center_x: cx,
+            center_y: cy,
+            width: rect.width,
+            height: rect.height
+        };
+    }
+    """
+
+    res = page.evaluate(js_multi_tier_click, [index, text_target])
+
+    # Tier 3: CDP / Playwright hardware coordinate click
+    if res.get("success") and res.get("center_x") and res.get("center_y"):
+        cx = res["center_x"]
+        cy = res["center_y"]
+        if cx > 0 and cy > 0:
+            try:
+                page.mouse.move(cx, cy)
+                page.mouse.down(button="left")
+                time.sleep(0.05)
+                page.mouse.up(button="left")
+            except Exception:
+                pass
+        return {"success": True, "tier_dispatch": "Tier 1 (DOM) + Tier 2 (Synthetic) + Tier 3 (CDP)", "target": target}
+
+    # Fallback to Playwright locator if JS lookup missed
+    if index is not None:
+        loc = page.locator(f'[data-swades-id="{index}"]').first
+        if loc.count() > 0:
+            loc.click(timeout=3000, no_wait_after=True)
+            return {"success": True, "tier_dispatch": "Playwright Locator", "target": target}
+    elif text_target:
+        for role in ["button", "link"]:
+            try:
+                loc = page.get_by_role(role, name=text_target, exact=False).first
+                if loc.count() > 0:
+                    loc.click(timeout=2500, no_wait_after=True)
+                    return {"success": True, "tier_dispatch": "Playwright Role", "target": target}
+            except Exception:
+                pass
+
+    return {"success": False, "error": f"Failed to dispatch click to target: {target}"}
+
+
+def _dispatch_type(page, target, text, clear=True, submit=False):
+    """
+    Multi-Tier Type Dispatcher:
+    Tier 1 & 2: Focus, Clear, Input/Change synthetic event bubbling on [data-swades-id="<index>"]
+    Tier 3: CDP / Playwright keyboard typing and Enter submission
+    """
+    _ensure_indexed(page)
+    index, text_target = _parse_index_target(target)
+
+    js_multi_tier_type = """
+    ([idx, txt, newText, shouldClear, shouldSubmit]) => {
+        let el = null;
+        if (idx !== null && idx !== undefined) {
+            el = document.querySelector(`[data-swades-id="${idx}"]`);
+        }
+        if (!el && txt) {
+            const cleanTxt = txt.toLowerCase().trim();
+            const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]'));
+            el = inputs.find(i => 
+                (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
+                (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
+                (i.name || '').toLowerCase().includes(cleanTxt) ||
+                (i.value || '').toLowerCase().includes(cleanTxt)
+            ) || inputs[0];
+            if (!el) {
+                try { el = document.querySelector(txt); } catch(_) {}
+            }
+        }
+
+        if (!el) return { success: false, error: 'Target input not found in DOM' };
+
+        try {
+            el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        } catch (_) {}
+
+        if (typeof el.focus === 'function') el.focus();
+
+        const rect = el.getBoundingClientRect();
+        const cx = Math.round(rect.x + rect.width / 2);
+        const cy = Math.round(rect.y + rect.height / 2);
+
+        // Tier 1 & 2: Set value & trigger synthetic input / change events
+        if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
+            if (shouldClear) {
+                el.value = '';
+            }
+            el.value = shouldClear ? newText : (el.value + newText);
+        } else if (el.isContentEditable) {
+            if (shouldClear) el.innerText = '';
+            el.innerText = shouldClear ? newText : (el.innerText + newText);
+        }
+
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true, composed: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true, composed: true }));
+
+        if (shouldSubmit && el.form) {
+            try {
+                if (typeof el.form.requestSubmit === 'function') {
+                    el.form.requestSubmit();
+                } else {
+                    el.form.submit();
+                }
+            } catch (_) {}
+        }
+
+        return {
+            success: true,
+            center_x: cx,
+            center_y: cy
+        };
+    }
+    """
+
+    res = page.evaluate(js_multi_tier_type, [index, text_target, text, clear, submit])
+
+    # Tier 3: Hardware keyboard events & Enter submission
+    if res.get("success"):
+        if submit:
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+        return {"success": True, "tier_dispatch": "Multi-tier Type + Events", "target": target, "text": text}
+
+    # Fallback to Playwright locator
+    if index is not None:
+        loc = page.locator(f'[data-swades-id="{index}"]').first
+        if loc.count() > 0:
+            if clear:
+                loc.fill(text, timeout=3000, no_wait_after=True)
+            else:
+                loc.type(text, timeout=3000, no_wait_after=True)
+            if submit:
+                page.keyboard.press("Enter")
+            return {"success": True, "tier_dispatch": "Playwright Locator Fill", "target": target}
+
+    return {"success": False, "error": f"Failed to type into target: {target}"}
+
+
+def _dispatch_select(page, target, value):
+    """
+    Multi-Tier Select Dispatcher for dropdown elements:
+    Tier 1: DOM selectedIndex and option.selected
+    Tier 2: Synthetic input and change event bubbling
+    Tier 3: Playwright select_option fallback
+    """
+    _ensure_indexed(page)
+    index, text_target = _parse_index_target(target)
+
+    js_multi_tier_select = """
+    ([idx, txt, val]) => {
+        let el = null;
+        if (idx !== null && idx !== undefined) {
+            el = document.querySelector(`[data-swades-id="${idx}"]`);
+        }
+        if (!el && txt) {
+            try { el = document.querySelector(txt); } catch(_) {}
+            if (!el) {
+                const selects = Array.from(document.querySelectorAll('select'));
+                el = selects.find(s => (s.name || '').toLowerCase().includes(txt.toLowerCase()) || (s.getAttribute('aria-label') || '').toLowerCase().includes(txt.toLowerCase())) || selects[0];
+            }
+        }
+
+        if (!el || el.tagName.toLowerCase() !== 'select') {
+            return { success: false, error: 'Select element not found' };
+        }
+
+        try {
+            el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        } catch (_) {}
+
+        if (typeof el.focus === 'function') el.focus();
+
+        const valClean = String(val).toLowerCase().trim();
+        let matched = false;
+
+        for (let i = 0; i < el.options.length; i++) {
+            const opt = el.options[i];
+            const optText = (opt.text || '').toLowerCase().trim();
+            const optVal = (opt.value || '').toLowerCase().trim();
+            if (optVal === valClean || optText === valClean || optText.includes(valClean) || valClean.includes(optText)) {
+                el.selectedIndex = i;
+                opt.selected = true;
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched && el.options.length > 0) {
+            el.value = val;
+        }
+
+        el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true, composed: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true, composed: true }));
+
+        return { success: true };
+    }
+    """
+
+    res = page.evaluate(js_multi_tier_select, [index, text_target, value])
+    if res.get("success"):
+        return {"success": True, "tier_dispatch": "Multi-tier Select", "target": target, "value": value}
+
+    # Playwright fallback
+    try:
+        sel_loc = page.locator(f'[data-swades-id="{index}"]').first if index is not None else page.locator(text_target or "select").first
+        if sel_loc.count() > 0:
+            sel_loc.select_option(label=value, timeout=2500)
+            return {"success": True, "tier_dispatch": "Playwright Select Option", "target": target, "value": value}
+    except Exception:
+        try:
+            sel_loc.select_option(value=value, timeout=2500)
+            return {"success": True, "tier_dispatch": "Playwright Select Option (by value)", "target": target, "value": value}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    return {"success": False, "error": f"Failed to select '{value}' on target '{target}'"}
+
+
+def _dispatch_scroll(page, direction="down", amount=500):
+    """Scrolls webpage smoothly and handles settlement."""
+    dir_clean = str(direction).lower().strip()
+    amt = int(amount) if amount else 500
+
+    delta_x = 0
+    delta_y = 0
+    if dir_clean == "up":
+        delta_y = -amt
+    elif dir_clean == "down":
+        delta_y = amt
+    elif dir_clean == "left":
+        delta_x = -amt
+    elif dir_clean == "right":
+        delta_x = amt
+    else:
+        delta_y = amt
+
+    page.evaluate(f"window.scrollBy({delta_x}, {delta_y})")
+    try:
+        page.mouse.wheel(delta_x, delta_y)
+    except Exception:
+        pass
+    return {"success": True, "action": "scroll", "direction": dir_clean, "amount": amt}
+
+
+# =====================================================================
+# Closed-World Indexed Tool API (with Automatic Inline Observations)
+# =====================================================================
+
 def browser_navigate(url: str):
-    """Navigates to URL and immediately returns the extracted live page snapshot."""
+    """Navigates to URL, waits for settlement (300-500ms), and returns the live compact indexed snapshot."""
     target_url = url.strip()
-    if not target_url.startswith(("http://", "https://", "file://", "about:")):
+    if not target_url.startswith(("http://", "https://", "file://", "about:", "data:")):
         target_url = f"https://{target_url}"
 
     try:
@@ -223,183 +835,141 @@ def browser_navigate(url: str):
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
             page.goto(target_url, timeout=15000, wait_until="domcontentloaded")
-            time.sleep(0.5)
-            return _extract_page_snapshot(page, browser)
+            time.sleep(0.4)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_navigate"
+            obs["target_url"] = target_url
+            return obs
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "action": "browser_navigate", "error": str(e)}
 
 
 def browser_snapshot():
-    """Extracts structured content, search results, and interactive elements using Playwright."""
+    """Explicitly extracts compact indexed DOM ([@0], [@1], ...), search results, and page summary."""
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
-            return _extract_page_snapshot(page, browser)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_snapshot"
+            return obs
     except Exception as e:
         return {
+            "success": False,
+            "action": "browser_snapshot",
+            "error": str(e),
+            "compact_dom": "",
             "browser_context": {"status": f"CDP Offline: {str(e)}"},
             "desktop_context": get_desktop_windows()
         }
 
 
-def browser_click(target: str):
-    """Clicks an element by role, text, or selector, and returns the updated page snapshot."""
+def browser_click(index):
+    """
+    Clicks element by closed-world index (e.g. 0, 1, '[@0]') using Multi-Tier Action Dispatch,
+    waits 300-500ms for settlement, and automatically returns the updated compact indexed DOM snapshot!
+    """
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
-            clicked = False
-            last_err = None
+            dispatch_res = _dispatch_click(page, index)
+            if not dispatch_res.get("success"):
+                return {"success": False, "action": "browser_click", "error": dispatch_res.get("error")}
 
-            clean_target = re.sub(r"[™®©'\"\[\]]", "", target).strip()
-            words = [w for w in clean_target.split() if len(w) > 2]
-            first_keywords = " ".join(words[:2]) if len(words) >= 2 else clean_target
-
-            # 1. JavaScript Direct DOM Click (Fastest and Most Reliable for SPAs)
-            try:
-                js_click = """(t) => {
-                    const targetLower = t.toLowerCase();
-                    const elements = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"], [tabindex="0"], div, span'));
-                    for (const el of elements) {
-                        const txt = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
-                        if (txt && (txt === targetLower || txt.includes(targetLower) || targetLower.includes(txt))) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }"""
-                clicked = page.evaluate(js_click, clean_target)
-            except Exception as e:
-                last_err = e
-
-            # 2. Try get_by_role (button or link)
-            if not clicked:
-                for role in ["button", "link"]:
-                    try:
-                        loc = page.get_by_role(role, name=clean_target, exact=False).first
-                        if loc.count() > 0:
-                            loc.click(timeout=2000, no_wait_after=True)
-                            clicked = True
-                            break
-                    except Exception as e:
-                        last_err = e
-
-            # 3. Try get_by_text with clean target
-            if not clicked:
-                try:
-                    loc = page.get_by_text(clean_target, exact=False).first
-                    if loc.count() > 0:
-                        loc.click(timeout=2000, no_wait_after=True)
-                        clicked = True
-                except Exception as e:
-                    last_err = e
-
-            # 4. Try locator with regex keywords (e.g. "Play", "AMD Instinct")
-            if not clicked and first_keywords:
-                try:
-                    pattern = re.compile(re.escape(first_keywords), re.IGNORECASE)
-                    loc = page.locator("a, button, [role='button'], h3, input, [aria-label]").filter(has_text=pattern).first
-                    if loc.count() > 0:
-                        loc.click(timeout=2000, no_wait_after=True)
-                        clicked = True
-                except Exception as e:
-                    last_err = e
-
-            # 5. Try direct selector / locator
-            if not clicked:
-                try:
-                    loc = page.locator(target).first
-                    if loc.count() > 0:
-                        loc.click(timeout=2000, no_wait_after=True)
-                        clicked = True
-                except Exception as e:
-                    last_err = e
-
-            if clicked:
-                time.sleep(0.8)
-                # Return live snapshot of the new page right away!
-                return _extract_page_snapshot(page, browser)
-
-            return {"success": False, "error": f"Element '{target}' not found: {str(last_err)}"}
+            # Settlement wait
+            time.sleep(0.4)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_click"
+            obs["dispatch"] = dispatch_res.get("tier_dispatch")
+            return obs
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "action": "browser_click", "error": str(e)}
 
 
-def browser_type(target: str, text: str, press_enter: bool = False):
-    """Types text into an element using Playwright and returns updated page snapshot."""
+def browser_type(index, text: str, clear: bool = True, submit: bool = False):
+    """
+    Types into input/textarea by closed-world index using Multi-Tier Action Dispatch,
+    waits 300-500ms for settlement, and automatically returns the updated compact indexed DOM snapshot!
+    """
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
-            typed = False
-            last_err = None
+            dispatch_res = _dispatch_type(page, index, text, clear=clear, submit=submit)
+            if not dispatch_res.get("success"):
+                return {"success": False, "action": "browser_type", "error": dispatch_res.get("error")}
 
-            clean_target = re.sub(r"[™®©'\"\[\]]", "", target).strip()
-
-            # Try by placeholder, role, label, value, exact selector, or visible input
-            for try_func in [
-                lambda: page.get_by_placeholder(clean_target, exact=False).first,
-                lambda: page.get_by_role("textbox", name=clean_target, exact=False).first,
-                lambda: page.get_by_label(clean_target, exact=False).first,
-                lambda: page.locator(f"input[value*='{clean_target}']").first,
-                lambda: page.locator(target).first,
-                lambda: page.locator("input:not([type='hidden']), textarea").first
-            ]:
-                try:
-                    loc = try_func()
-                    if loc.count() > 0:
-                        loc.fill(text, timeout=2500, no_wait_after=True)
-                        if press_enter:
-                            loc.press("Enter", timeout=2000, no_wait_after=True)
-                        typed = True
-                        break
-                except Exception as e:
-                    last_err = e
-
-            # JavaScript DOM Fill fallback
-            if not typed:
-                try:
-                    js_fill = """([val, targetVal]) => {
-                        const t = (targetVal || '').toLowerCase();
-                        let inputs = Array.from(document.querySelectorAll('input:not([type=hidden]), textarea'));
-                        let el = inputs.find(i => (i.placeholder||'').toLowerCase().includes(t) || (i.value||'').toLowerCase().includes(t) || (i.name||'').toLowerCase().includes(t)) || inputs[0];
-                        if (el) {
-                            el.focus();
-                            el.value = val;
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            return true;
-                        }
-                        return false;
-                    }"""
-                    typed = page.evaluate(js_fill, [text, clean_target])
-                except Exception as e:
-                    last_err = e
-
-            if typed:
-                time.sleep(0.4)
-                return _extract_page_snapshot(page, browser)
-
-            return {"success": False, "error": f"Target '{target}' not found for typing: {str(last_err)}"}
+            # Settlement wait
+            time.sleep(0.4)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_type"
+            obs["dispatch"] = dispatch_res.get("tier_dispatch")
+            return obs
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "action": "browser_type", "error": str(e)}
+
+
+def browser_select(index, value: str):
+    """
+    Selects dropdown option on select element by closed-world index using Multi-Tier Action Dispatch,
+    waits 300-500ms for settlement, and automatically returns the updated compact indexed DOM snapshot!
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser, page = get_playwright_page(p)
+            dispatch_res = _dispatch_select(page, index, value)
+            if not dispatch_res.get("success"):
+                return {"success": False, "action": "browser_select", "error": dispatch_res.get("error")}
+
+            # Settlement wait
+            time.sleep(0.4)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_select"
+            obs["dispatch"] = dispatch_res.get("tier_dispatch")
+            return obs
+    except Exception as e:
+        return {"success": False, "action": "browser_select", "error": str(e)}
 
 
 def browser_scroll(direction: str = "down", amount: int = 500):
-    """Scrolls webpage using Playwright and returns newly visible page snapshot."""
+    """
+    Scrolls webpage smoothly, waits 300-500ms for settlement,
+    and automatically returns newly visible compact indexed DOM snapshot!
+    """
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser, page = get_playwright_page(p)
-            delta = amount if direction == "down" else -amount
-            page.evaluate(f"window.scrollBy(0, {delta})")
+            _dispatch_scroll(page, direction, amount)
             time.sleep(0.4)
-            return _extract_page_snapshot(page, browser)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_scroll"
+            return obs
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "action": "browser_scroll", "error": str(e)}
 
+
+def browser_wait(seconds: float = 1.0):
+    """Waits for specified seconds and returns fresh compact indexed DOM snapshot."""
+    try:
+        wait_s = max(0.1, float(seconds))
+        time.sleep(wait_s)
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser, page = get_playwright_page(p)
+            obs = _extract_page_snapshot(page, browser)
+            obs["action"] = "browser_wait"
+            obs["waited_seconds"] = wait_s
+            return obs
+    except Exception as e:
+        return {"success": False, "action": "browser_wait", "error": str(e)}
+
+
+# =====================================================================
+# Desktop Application Window & Keyboard Control
+# =====================================================================
 
 def get_desktop_windows():
     """Lists desktop application windows via wmctrl / xdotool."""
@@ -420,7 +990,6 @@ def get_desktop_windows():
     except Exception:
         pass
 
-    # Fallback to xdotool if wmctrl returned nothing
     if not windows:
         try:
             res = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", ""], stdout=subprocess.PIPE, text=True)
@@ -455,7 +1024,6 @@ def desktop_window_control(action: str, target: str = None):
                 if not any(ign in title.lower() for ign in ["swades", "xfce", "panel", "desktop"]):
                     subprocess.run(["wmctrl", "-i", "-c", win_id], check=False)
                     closed.append(title)
-            # Also terminate any running browser processes so Chrome/Chromium window definitely closes!
             subprocess.run(["pkill", "-f", "google-chrome"], check=False)
             subprocess.run(["pkill", "-f", "chromium"], check=False)
             if not closed:
@@ -494,10 +1062,65 @@ def desktop_interact(action: str, x: int = None, y: int = None, keys: str = None
     return {"error": f"Invalid desktop interact arguments: action={action}"}
 
 
+# =====================================================================
+# CLI Entry Point
+# =====================================================================
+
 def main():
     if len(sys.argv) < 2:
         print(json.dumps(browser_snapshot(), indent=2))
         return
+
+    # Check for --json input
+    if "--json" in sys.argv:
+        try:
+            json_idx = sys.argv.index("--json")
+            if json_idx + 1 < len(sys.argv):
+                payload = json.loads(sys.argv[json_idx + 1])
+            else:
+                payload = json.loads(sys.stdin.read())
+            
+            action = payload.get("action") or payload.get("tool") or ""
+            if action in ["navigate", "browser_navigate"]:
+                print(json.dumps(browser_navigate(payload.get("url", ""))))
+            elif action in ["snapshot", "browser_snapshot"]:
+                print(json.dumps(browser_snapshot()))
+            elif action in ["click", "browser_click"]:
+                print(json.dumps(browser_click(payload.get("index") if payload.get("index") is not None else payload.get("target"))))
+            elif action in ["type", "browser_type"]:
+                print(json.dumps(browser_type(
+                    payload.get("index") if payload.get("index") is not None else payload.get("target"),
+                    payload.get("text", ""),
+                    clear=payload.get("clear", True),
+                    submit=payload.get("submit", False)
+                )))
+            elif action in ["select", "browser_select"]:
+                print(json.dumps(browser_select(
+                    payload.get("index") if payload.get("index") is not None else payload.get("target"),
+                    payload.get("value", "")
+                )))
+            elif action in ["scroll", "browser_scroll"]:
+                print(json.dumps(browser_scroll(
+                    direction=payload.get("direction", "down"),
+                    amount=int(payload.get("amount", 500))
+                )))
+            elif action in ["wait", "browser_wait"]:
+                print(json.dumps(browser_wait(float(payload.get("seconds", 1.0)))))
+            elif action in ["windows", "window_control", "desktop_window_control"]:
+                print(json.dumps(desktop_window_control(payload.get("action", "list"), payload.get("target"))))
+            elif action in ["interact", "desktop_interact"]:
+                print(json.dumps(desktop_interact(
+                    payload.get("action", "click"),
+                    x=payload.get("x"),
+                    y=payload.get("y"),
+                    keys=payload.get("keys")
+                )))
+            else:
+                print(json.dumps({"error": f"Unknown action '{action}' in JSON payload"}))
+            return
+        except Exception as e:
+            print(json.dumps({"error": f"Failed to parse JSON payload: {str(e)}"}))
+            return
 
     cmd = sys.argv[1].lower()
 
@@ -507,17 +1130,25 @@ def main():
         url = sys.argv[2] if len(sys.argv) > 2 else "https://google.com"
         print(json.dumps(browser_navigate(url), indent=2))
     elif cmd in ["click", "browser_click"]:
-        target = sys.argv[2] if len(sys.argv) > 2 else ""
+        target = sys.argv[2] if len(sys.argv) > 2 else "0"
         print(json.dumps(browser_click(target), indent=2))
     elif cmd in ["type", "browser_type", "fill"]:
-        target = sys.argv[2] if len(sys.argv) > 2 else ""
+        target = sys.argv[2] if len(sys.argv) > 2 else "0"
         text = sys.argv[3] if len(sys.argv) > 3 else ""
-        press_enter = ("--enter" in sys.argv or "-e" in sys.argv)
-        print(json.dumps(browser_type(target, text, press_enter), indent=2))
+        clear = "--no-clear" not in sys.argv
+        submit = "--submit" in sys.argv or "--enter" in sys.argv or "-e" in sys.argv
+        print(json.dumps(browser_type(target, text, clear=clear, submit=submit), indent=2))
+    elif cmd in ["select", "browser_select"]:
+        target = sys.argv[2] if len(sys.argv) > 2 else "0"
+        value = sys.argv[3] if len(sys.argv) > 3 else ""
+        print(json.dumps(browser_select(target, value), indent=2))
     elif cmd in ["scroll", "browser_scroll"]:
         direction = sys.argv[2] if len(sys.argv) > 2 else "down"
         amount = int(sys.argv[3]) if len(sys.argv) > 3 else 500
         print(json.dumps(browser_scroll(direction, amount), indent=2))
+    elif cmd in ["wait", "browser_wait"]:
+        seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
+        print(json.dumps(browser_wait(seconds), indent=2))
     elif cmd in ["windows", "window_control", "desktop_window_control"]:
         action = sys.argv[2] if len(sys.argv) > 2 else "list"
         target = sys.argv[3] if len(sys.argv) > 3 else None

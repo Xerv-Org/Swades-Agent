@@ -1555,7 +1555,9 @@ const TOOL_REGISTRY = {
   browser_snapshot: (args) => executeCuaTool("browser_snapshot", args),
   browser_click: (args) => executeCuaTool("browser_click", args),
   browser_type: (args) => executeCuaTool("browser_type", args),
+  browser_select: (args) => executeCuaTool("browser_select", args),
   browser_scroll: (args) => executeCuaTool("browser_scroll", args),
+  browser_wait: (args) => executeCuaTool("browser_wait", args),
   desktop_window_control: (args) => executeCuaTool("desktop_window_control", args),
   desktop_interact: (args) => executeCuaTool("desktop_interact", args),
   // Legacy CUA aliases
