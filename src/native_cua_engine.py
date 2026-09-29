@@ -656,21 +656,26 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
         if (idx !== null && idx !== undefined) {
             el = document.querySelector(`[data-swades-id="${idx}"]`);
         }
-        if (!el) {
-            const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]')).filter(i => {
-                const r = i.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-            });
-            if (txt) {
-                const cleanTxt = txt.toLowerCase().trim();
-                el = inputs.find(i => 
-                    (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
-                    (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
-                    (i.name || '').toLowerCase().includes(cleanTxt) ||
-                    (i.value || '').toLowerCase().includes(cleanTxt)
-                );
-            }
-            if (!el && inputs.length > 0) {
+        
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]')).filter(i => {
+            const r = i.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        });
+
+        if (!el && txt) {
+            const cleanTxt = txt.toLowerCase().trim();
+            el = inputs.find(i => 
+                (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
+                (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
+                (i.name || '').toLowerCase().includes(cleanTxt) ||
+                (i.value || '').toLowerCase().includes(cleanTxt)
+            );
+        }
+
+        if (!el && inputs.length > 0) {
+            if (idx !== null && idx !== undefined && inputs[idx]) {
+                el = inputs[idx];
+            } else {
                 el = inputs[0];
             }
         }
