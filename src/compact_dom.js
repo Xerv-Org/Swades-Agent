@@ -199,8 +199,9 @@ function checkElementVisibility(el, rect, win) {
     return false;
   }
 
-  const viewWidth = win ? (win.innerWidth || 1920) : 1920;
-  const viewHeight = win ? (win.innerHeight || 1080) : 1080;
+  const doc = el.ownerDocument || (win ? win.document : null);
+  const viewWidth = win ? Math.max(win.innerWidth || 0, win.outerWidth || 0, doc && doc.documentElement ? (doc.documentElement.scrollWidth || 0) : 0, 1280) : 1920;
+  const viewHeight = win ? Math.max(win.innerHeight || 0, win.outerHeight || 0, doc && doc.documentElement ? (doc.documentElement.scrollHeight || 0) : 0, 1080) : 1080;
 
   // Viewport intersection check
   if (
