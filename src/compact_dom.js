@@ -15,6 +15,22 @@
 
 const OVERLAY_CONTAINER_ID = '__swades_overlay_container';
 
+const AD_HOST_KEYWORDS = [
+  'doubleclick.net', 'googlesyndication.com', 'safeframe', 'google.com/recaptcha',
+  'challenges.cloudflare.com', 'adnxs.com', 'rubiconproject.com', 'criteo.com',
+  'adagio.js', 'sync pixels', 'amazon-adsystem.com', 'taboola.com', 'outbrain.com',
+  'partnerpixels', 'google-analytics.com', '4dex.io', 'quantserve.com', 'scorecardresearch.com',
+  'adroll.com', 'use1-x.d.adroll.com', 'yieldmo.com', 'openx.net', 'pubmatic.com', '__adroll'
+];
+
+function isAdElement(node) {
+  if (!node) return false;
+  const id = (node.id || '').toLowerCase();
+  const cls = (typeof node.className === 'string' ? node.className : '').toLowerCase();
+  const src = (node.src || node.href || '').toLowerCase();
+  return AD_HOST_KEYWORDS.some(ad => id.includes(ad) || cls.includes(ad) || src.includes(ad));
+}
+
 /**
  * Clean up existing overlays
  */
@@ -525,6 +541,9 @@ function collectDomCandidates(rootNode, frameOffset = { x: 0, y: 0 }, results = 
             if (node.id === OVERLAY_CONTAINER_ID || (node.hasAttribute && node.hasAttribute('data-swades-overlay'))) {
               return 2; // FILTER_REJECT
             }
+            if (isAdElement(node)) {
+              return 2; // FILTER_REJECT
+            }
             return 1; // FILTER_ACCEPT
           }
         },
@@ -554,6 +573,8 @@ function collectDomCandidates(rootNode, frameOffset = { x: 0, y: 0 }, results = 
   for (const node of nodes) {
     if (!node || node.nodeType !== 1) continue;
 
+    if (isAdElement(node)) continue;
+
     // 1. Traverse Open Shadow DOM if present
     if (node.shadowRoot) {
       collectDomCandidates(node.shadowRoot, frameOffset, results);
@@ -563,14 +584,16 @@ function collectDomCandidates(rootNode, frameOffset = { x: 0, y: 0 }, results = 
     const tag = node.tagName ? node.tagName.toUpperCase() : '';
     if (tag === 'IFRAME' || tag === 'FRAME') {
       try {
-        const iframeDoc = node.contentDocument || (node.contentWindow ? node.contentWindow.document : null);
-        if (iframeDoc) {
-          const iframeRect = node.getBoundingClientRect();
-          const nextOffset = {
-            x: frameOffset.x + iframeRect.left,
-            y: frameOffset.y + iframeRect.top
-          };
-          collectDomCandidates(iframeDoc, nextOffset, results);
+        if (!isAdElement(node)) {
+          const iframeDoc = node.contentDocument || (node.contentWindow ? node.contentWindow.document : null);
+          if (iframeDoc) {
+            const iframeRect = node.getBoundingClientRect();
+            const nextOffset = {
+              x: frameOffset.x + iframeRect.left,
+              y: frameOffset.y + iframeRect.top
+            };
+            collectDomCandidates(iframeDoc, nextOffset, results);
+          }
         }
       } catch {
         // Cross-origin iframe security error — skip gracefully
