@@ -381,7 +381,7 @@ def _build_compact_dom_representation(elements):
 
 
 def safe_eval_compact_dom(page):
-    """Executes compact_dom.js with automatic retry and load state synchronization."""
+    """Executes compact_dom.js with automatic retry, load state sync, and fallback to direct DOM indexing."""
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compact_dom.js")
     try:
         with open(script_path, "r", encoding="utf-8") as f:
@@ -389,18 +389,28 @@ def safe_eval_compact_dom(page):
     except Exception:
         js_code = ""
 
-    for attempt in range(5):
+    for attempt in range(3):
         try:
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=2500)
+                page.wait_for_load_state("domcontentloaded", timeout=2000)
             except Exception:
                 pass
             if js_code:
                 res = page.evaluate(f"() => {{\n{js_code}\nreturn getCompactDom();\n}}")
-                if res and isinstance(res, dict) and "elements" in res and res["elements"]:
+                if res and isinstance(res, dict) and res.get("elements"):
                     return res
         except Exception:
-            time.sleep(0.35)
+            time.sleep(0.2)
+
+    # Robust In-Page Fallback
+    try:
+        elements = page.evaluate(INDEX_DOM_SCRIPT)
+        if elements:
+            dsl = _build_compact_dom_representation(elements)
+            return {"elements": elements, "dsl": dsl}
+    except Exception:
+        pass
+
     return {"elements": [], "dsl": ""}
 
 
