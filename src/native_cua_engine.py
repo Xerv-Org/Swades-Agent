@@ -381,7 +381,7 @@ def _build_compact_dom_representation(elements):
 
 
 def safe_eval_compact_dom(page):
-    """Executes compact_dom.js with automatic retry against context destruction and navigation."""
+    """Executes compact_dom.js with automatic retry and load state synchronization."""
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compact_dom.js")
     try:
         with open(script_path, "r", encoding="utf-8") as f:
@@ -391,12 +391,16 @@ def safe_eval_compact_dom(page):
 
     for attempt in range(5):
         try:
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=2500)
+            except Exception:
+                pass
             if js_code:
                 res = page.evaluate(f"() => {{\n{js_code}\nreturn getCompactDom();\n}}")
-                if res and isinstance(res, dict) and "elements" in res:
+                if res and isinstance(res, dict) and "elements" in res and res["elements"]:
                     return res
         except Exception:
-            time.sleep(0.25)
+            time.sleep(0.35)
     return {"elements": [], "dsl": ""}
 
 
@@ -495,6 +499,11 @@ def _dispatch_click(page, target):
     Tier 2: Synthetic framework event dispatcher (pointerdown, mousedown, focus, pointerup, mouseup, click)
     Tier 3: CDP coordinate click via Input.dispatchMouseEvent / Playwright mouse at exact center (x, y)
     """
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=2000)
+    except Exception:
+        pass
+
     _ensure_indexed(page)
     index, text_target = _parse_index_target(target)
     
@@ -575,7 +584,14 @@ def _dispatch_click(page, target):
     }
     """
 
-    res = page.evaluate(js_multi_tier_click, [index, text_target])
+    res = {}
+    for _ in range(3):
+        try:
+            res = page.evaluate(js_multi_tier_click, [index, text_target])
+            if res.get("success"):
+                break
+        except Exception:
+            time.sleep(0.2)
 
     # Tier 3: CDP / Playwright hardware coordinate click
     if res.get("success") and res.get("center_x") and res.get("center_y"):
@@ -616,6 +632,11 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
     Tier 1 & 2: Focus, Clear, Input/Change synthetic event bubbling on [data-swades-id="<index>"]
     Tier 3: CDP / Playwright keyboard typing and Enter submission
     """
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=2000)
+    except Exception:
+        pass
+
     _ensure_indexed(page)
     index, text_target = _parse_index_target(target)
 
