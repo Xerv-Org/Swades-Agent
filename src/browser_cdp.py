@@ -445,16 +445,27 @@ class BrowserCDP:
         pages = self._context.pages if self._context else []
         candidates = []
 
+        AD_HOST_BLACKLIST = [
+            "doubleclick.net", "googlesyndication.com", "safeframe", "google.com/recaptcha",
+            "challenges.cloudflare.com", "adnxs.com", "rubiconproject.com", "criteo.com",
+            "adagio.js", "sync pixels", "amazon-adsystem.com", "taboola.com", "outbrain.com",
+            "partnerpixels", "google-analytics.com", "4dex.io", "quantserve.com", "scorecardresearch.com",
+            "adroll.com", "use1-x.d.adroll.com", "yieldmo.com", "openx.net", "pubmatic.com"
+        ]
+
         for pg in pages:
             try:
                 if pg.is_closed():
                     continue
 
-                url = pg.url or ""
+                url = (pg.url or "").lower()
                 # Ignore system & devtools internal pages
                 if any(url.startswith(prefix) for prefix in [
                     "chrome://", "chrome-extension://", "devtools://", "edge://", "view-source:"
                 ]):
+                    continue
+
+                if any(ad in url for ad in AD_HOST_BLACKLIST):
                     continue
 
                 # Query page dimensions and DOM content
@@ -463,7 +474,7 @@ class BrowserCDP:
                     const winH = window.innerHeight || 0;
                     const bodyText = (document.body ? (document.body.innerText || '') : '').trim();
                     const elCount = document.querySelectorAll('*').length;
-                    const inputCount = document.querySelectorAll('input, button, a, select, textarea').length;
+                    const inputCount = document.querySelectorAll('input, button, a, select, textarea, [role="button"]').length;
                     return {
                         winW,
                         winH,
@@ -495,11 +506,13 @@ class BrowserCDP:
                 if body_len > 20:
                     score += min(body_len, 500)
                 if input_count > 0:
-                    score += input_count * 10
+                    score += input_count * 20
                 if not url.startswith("about:blank"):
-                    score += 50
+                    score += 100
+                if "richup" in url or "google" in url or "github" in url or "wikipedia" in url:
+                    score += 1000
                 if info.get("title"):
-                    score += 20
+                    score += 50
 
                 candidates.append((score, pg))
             except Exception:
