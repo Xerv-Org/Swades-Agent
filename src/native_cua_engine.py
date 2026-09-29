@@ -132,7 +132,8 @@ def get_playwright_page(p):
         "doubleclick.net", "googlesyndication.com", "safeframe", "google.com/recaptcha",
         "challenges.cloudflare.com", "adnxs.com", "rubiconproject.com", "criteo.com",
         "adagio.js", "sync pixels", "amazon-adsystem.com", "taboola.com", "outbrain.com",
-        "partnerpixels", "google-analytics.com", "4dex.io", "quantserve.com", "scorecardresearch.com"
+        "partnerpixels", "google-analytics.com", "4dex.io", "quantserve.com", "scorecardresearch.com",
+        "adroll.com", "use1-x.d.adroll.com", "yieldmo.com", "openx.net", "pubmatic.com"
     ]
 
     best_page = None
