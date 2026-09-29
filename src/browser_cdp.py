@@ -633,7 +633,8 @@ class BrowserCDP:
             raw_script = DEFAULT_COMPACT_DOM_JS
 
         import re
-        sanitized_script = re.sub(r'^\s*export\s+default\s+.*$', '', raw_script, flags=re.MULTILINE)
+        sanitized_script = re.sub(r'export\s*\{[^}]*\}\s*;?', '', raw_script)
+        sanitized_script = re.sub(r'^\s*export\s+default\s+.*$', '', sanitized_script, flags=re.MULTILINE)
         sanitized_script = re.sub(r'^\s*export\s+(function|const|let|var|class)\s+', r'\1 ', sanitized_script, flags=re.MULTILINE)
 
         wrapper_script = f"""
