@@ -30,7 +30,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Swades Copilot Studio</title>
+  <title>Swades CUA</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
@@ -362,7 +362,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
   <header>
     <div class="brand">
       <div class="brand-logo">⚡</div>
-      <div class="brand-title">Swades Copilot Studio</div>
+      <div class="brand-title">Swades CUA</div>
     </div>
     <div style="display:flex; align-items:center; gap:8px;">
       <div class="status-badge" id="statusBadge">
@@ -378,9 +378,9 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     <!-- Chat Pane -->
     <div class="chat-pane">
       <div class="chips-bar">
-        <button class="chip-item" onclick="triggerChip('Search for latest AMD MI300X specs and summarize in a table')">🌐 Browse Web (Playwright)</button>
+        <button class="chip-item" onclick="triggerChip('Navigate to richup.io and play')">🎲 Play Richup.io</button>
+        <button class="chip-item" onclick="triggerChip('Search for latest AMD MI300X specs and summarize in a table')">🌐 Browse Web</button>
         <button class="chip-item" onclick="triggerChip('List open user windows')">🔍 Scan Windows</button>
-        <button class="chip-item" onclick="triggerChip('Close all open windows')">❌ Close All</button>
       </div>
 
       <div class="messages-scroll" id="messagesScroll">
@@ -388,7 +388,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
       </div>
 
       <div class="input-bar">
-        <input type="text" id="taskInput" class="task-entry" placeholder="Ask Swades to do anything on your desktop..." autofocus onkeydown="if(event.key==='Enter') sendTask()">
+        <input type="text" id="taskInput" class="task-entry" placeholder="Ask Swades CUA to do anything on your desktop or web..." autofocus onkeydown="if(event.key==='Enter') sendTask()">
         <button class="send-button" id="sendBtn" onclick="sendTask()">
           <span>Run</span>
           <span>⚡</span>
@@ -445,7 +445,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         container.innerHTML = `
           <div style="color:var(--text-dim); text-align:center; padding-top:40px; font-size:13px;">
             <div style="font-size:24px; margin-bottom:8px;">⚡</div>
-            <div>Swades Autonomous Desktop Copilot</div>
+            <div>Swades CUA</div>
             <div style="margin-top:4px; font-size:12px;">Type any task below or click a suggestion chip to begin.</div>
           </div>
         `;
