@@ -307,12 +307,11 @@ INDEX_DOM_SCRIPT = """
 """
 
 def _ensure_indexed(page):
-    """Ensures that elements in the active page have data-swades-id attributes assigned."""
+    """Ensures that elements in the active page have data-swades-id attributes freshly assigned."""
     try:
-        has_index = page.evaluate("() => !!document.querySelector('[data-swades-id]')")
-        if not has_index:
-            page.evaluate(INDEX_DOM_SCRIPT)
+        page.evaluate(INDEX_DOM_SCRIPT)
     except Exception:
+        time.sleep(0.2)
         try:
             page.evaluate(INDEX_DOM_SCRIPT)
         except Exception:
@@ -630,17 +629,22 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
         if (idx !== null && idx !== undefined) {
             el = document.querySelector(`[data-swades-id="${idx}"]`);
         }
-        if (!el && txt) {
-            const cleanTxt = txt.toLowerCase().trim();
-            const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]'));
-            el = inputs.find(i => 
-                (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
-                (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
-                (i.name || '').toLowerCase().includes(cleanTxt) ||
-                (i.value || '').toLowerCase().includes(cleanTxt)
-            ) || inputs[0];
-            if (!el) {
-                try { el = document.querySelector(txt); } catch(_) {}
+        if (!el) {
+            const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]')).filter(i => {
+                const r = i.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            });
+            if (txt) {
+                const cleanTxt = txt.toLowerCase().trim();
+                el = inputs.find(i => 
+                    (i.placeholder || '').toLowerCase().includes(cleanTxt) ||
+                    (i.getAttribute('aria-label') || '').toLowerCase().includes(cleanTxt) ||
+                    (i.name || '').toLowerCase().includes(cleanTxt) ||
+                    (i.value || '').toLowerCase().includes(cleanTxt)
+                );
+            }
+            if (!el && inputs.length > 0) {
+                el = inputs[0];
             }
         }
 
@@ -650,18 +654,28 @@ def _dispatch_type(page, target, text, clear=True, submit=False):
             el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
         } catch (_) {}
 
-        if (typeof el.focus === 'function') el.focus();
-
         const rect = el.getBoundingClientRect();
         const cx = Math.round(rect.x + rect.width / 2);
         const cy = Math.round(rect.y + rect.height / 2);
 
+        try {
+            if (typeof el.focus === 'function') el.focus();
+            if (typeof el.click === 'function') el.click();
+        } catch (_) {}
+
         // Tier 1 & 2: Set value & trigger synthetic input / change events
-        if (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea') {
-            if (shouldClear) {
-                el.value = '';
+        if (el.tagName && (el.tagName.toLowerCase() === 'input' || el.tagName.toLowerCase() === 'textarea')) {
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            const finalVal = shouldClear ? newText : (el.value + newText);
+            
+            if (el.tagName.toLowerCase() === 'input' && nativeInputValueSetter) {
+                nativeInputValueSetter.call(el, finalVal);
+            } else if (el.tagName.toLowerCase() === 'textarea' && nativeTextAreaValueSetter) {
+                nativeTextAreaValueSetter.call(el, finalVal);
+            } else {
+                el.value = finalVal;
             }
-            el.value = shouldClear ? newText : (el.value + newText);
         } else if (el.isContentEditable) {
             if (shouldClear) el.innerText = '';
             el.innerText = shouldClear ? newText : (el.innerText + newText);
