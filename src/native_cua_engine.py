@@ -380,6 +380,26 @@ def _build_compact_dom_representation(elements):
     return "\n".join(lines)
 
 
+def safe_eval_compact_dom(page):
+    """Executes compact_dom.js with automatic retry against context destruction and navigation."""
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compact_dom.js")
+    try:
+        with open(script_path, "r", encoding="utf-8") as f:
+            js_code = f.read()
+    except Exception:
+        js_code = ""
+
+    for attempt in range(5):
+        try:
+            if js_code:
+                res = page.evaluate(f"() => {{\n{js_code}\nreturn getCompactDom();\n}}")
+                if res and isinstance(res, dict) and "elements" in res:
+                    return res
+        except Exception:
+            time.sleep(0.25)
+    return {"elements": [], "dsl": ""}
+
+
 def _extract_page_snapshot(page, browser=None):
     """Extracts structured content, compact indexed DOM ([@0], [@1], ...), and interactive elements from active page."""
     try:
@@ -398,68 +418,32 @@ def _extract_page_snapshot(page, browser=None):
 
         url = page.url or ""
 
-        # Extract main text / spec highlights
+        # Extract main text
         main_text = ""
-        if "google.com/search" not in url:
-            try:
-                body_txt = page.locator("body").inner_text(timeout=1000)
-                spec_paragraphs = []
-                for p_chunk in body_txt.split("\n\n"):
-                    p_clean = p_chunk.strip().replace("\n", " ")
-                    if len(p_clean) > 25 and any(k in p_clean.lower() for k in [
-                        "hbm", "bandwidth", "flop", "tflops", "compute", "tdp", "memory", 
-                        "transistor", "ghz", "architecture", "cdna", "hopper", "cuda", "rocm", "specs", "benchmark"
-                    ]):
-                        spec_paragraphs.append(p_clean)
-                        if len("\n\n".join(spec_paragraphs)) > 1200:
-                            break
-                if spec_paragraphs:
-                    main_text = "\n\n".join(spec_paragraphs)
-                elif body_txt:
-                    lines = [l.strip() for l in body_txt.split("\n") if l.strip()]
-                    main_text = "\n".join(lines[:30])
-            except Exception:
-                pass
-
-        if not main_text:
-            for selector in ['#rso', '[role="main"]', 'main', 'article', '#main', 'body']:
-                loc = page.locator(selector).first
-                try:
-                    if loc.count() > 0:
-                        txt = loc.inner_text(timeout=500).strip()
-                        if len(txt) > 40:
-                            lines = [l.strip() for l in txt.split("\n") if l.strip()]
-                            clean_lines = [l for l in lines if l not in [
-                                "Web results", "Search Results", "AI Mode", "All", 
-                                "Images", "Shopping", "Videos", "News", "Forums", "More", "Tools"
-                            ]]
-                            main_text = "\n".join(clean_lines)
-                            break
-                except Exception:
-                    pass
-
-        # Structured search results extraction
-        search_cards = []
         try:
-            js_cards = "() => Array.from(document.querySelectorAll('#rso .g, #rso div[data-hveid]')).map(el => ({ title: el.querySelector('h3')?.innerText?.trim() || '', snippet: (el.innerText || '').slice(0, 300) })).filter(c => c.title).slice(0, 6)"
-            card_data = page.evaluate(js_cards)
-            if card_data:
-                search_cards = card_data
+            body_txt = page.locator("body").inner_text(timeout=1000)
+            if body_txt:
+                lines = [l.strip() for l in body_txt.split("\n") if l.strip()]
+                main_text = "\n".join(lines[:25])
         except Exception:
             pass
 
-        # Run DOM indexing script
-        elements = []
-        try:
-            elements = page.evaluate(INDEX_DOM_SCRIPT)
-        except Exception:
-            time.sleep(0.2)
+        # Structured search results extraction if on google
+        search_cards = []
+        if "google.com/search" in url:
             try:
-                elements = page.evaluate(INDEX_DOM_SCRIPT)
+                js_cards = "() => Array.from(document.querySelectorAll('#rso .g, #rso div[data-hveid]')).map(el => ({ title: el.querySelector('h3')?.innerText?.trim() || '', snippet: (el.innerText || '').slice(0, 300) })).filter(c => c.title).slice(0, 6)"
+                card_data = page.evaluate(js_cards)
+                if card_data:
+                    search_cards = card_data
             except Exception:
-                elements = []
+                pass
 
-        compact_dom = _build_compact_dom_representation(elements)
+        # Run compact DOM perception engine
+        dom_res = safe_eval_compact_dom(page)
+        elements = dom_res.get("elements", [])
+        compact_dom = dom_res.get("dsl", "")
+
         desktop_wins = get_desktop_windows()
 
         return {
