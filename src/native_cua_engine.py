@@ -528,6 +528,7 @@ def _dispatch_click(page, target):
                     break;
                 }
             }
+        }
         if (!el && idx !== null && idx !== undefined) {
             const allInteractives = Array.from(document.querySelectorAll('button, a, input, select, textarea, [role="button"], div[class*="btn"], div[class*="button"], span[class*="btn"], span[class*="button"]')).filter(e => {
                 const r = e.getBoundingClientRect();
