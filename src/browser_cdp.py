@@ -435,16 +435,6 @@ class BrowserCDP:
         """
         self.connect()
 
-        if self._page and not force_refresh:
-            try:
-                if not self._page.is_closed():
-                    return self._page
-            except Exception:
-                pass
-
-        pages = self._context.pages if self._context else []
-        candidates = []
-
         AD_HOST_BLACKLIST = [
             "doubleclick.net", "googlesyndication.com", "safeframe", "google.com/recaptcha",
             "challenges.cloudflare.com", "adnxs.com", "rubiconproject.com", "criteo.com",
@@ -452,6 +442,18 @@ class BrowserCDP:
             "partnerpixels", "google-analytics.com", "4dex.io", "quantserve.com", "scorecardresearch.com",
             "adroll.com", "use1-x.d.adroll.com", "yieldmo.com", "openx.net", "pubmatic.com"
         ]
+
+        if self._page and not force_refresh:
+            try:
+                if not self._page.is_closed():
+                    curr_url = (self._page.url or "").lower()
+                    if not any(ad in curr_url for ad in AD_HOST_BLACKLIST) and not curr_url.startswith(("chrome://", "devtools://", "about:blank")):
+                        return self._page
+            except Exception:
+                pass
+
+        pages = self._context.pages if self._context else []
+        candidates = []
 
         for pg in pages:
             try:
